@@ -116,31 +116,37 @@ Prioridade:
 
 ## EPIC-03 - SDK compartilhado para apps
 
-- [~] P1 Card 03.01 - Criar `auth-client-vue`
+- [x] P1 Card 03.01 - Criar `auth-client-vue`
   Objetivo: remover duplicacao de MSAL/auth lifecycle nos dois frontends.
   Dependencias: EPIC-02 completo.
   Status atual:
-  - Scaffold e build criados.
-  - API publica ainda minima (nao cobre lifecycle completo).
+  - SDK implementado com login redirect seguro, callback/session exchange, sessao, refresh e logout.
+  - Single-flight de refresh e recovery de background com retry/backoff implementados.
+  - Contratos v1 validados por testes automatizados (`auth-client-vue/test`).
   Criterios de aceite:
   - SDK cobre login, callback, sessao, refresh, logout.
   - Inclui single-flight e recovery de background.
   - Exemplo de uso validado em app sandbox.
 
-- [~] P1 Card 03.02 - Criar `auth-guard-nest`
+- [x] P1 Card 03.02 - Criar `auth-guard-nest`
   Objetivo: padronizar validacao de token e acesso a claims nas APIs Nest.
   Dependencias: Card 02.04.
   Status atual:
-  - Scaffold e tipos iniciais criados.
-  - Guard JWT, decorators e integracao Nest ainda nao implementados.
+  - Guard Nest implementado com validacao JWT RS256 via JWKS remoto (jose).
+  - Decorators e helpers de claims tipadas implementados (`CurrentAuthClaims`, `CurrentAuthUserId`, `CurrentAuthSessionId`).
+  - Suporte a bypass por metadata (`@Public`) implementado.
   Criterios de aceite:
   - Guard valida JWT da Auth Platform via JWKS.
   - Decorators/helpers entregam claims tipadas.
   - Erros seguem contrato canonico.
 
-- [ ] P1 Card 03.03 - Testes de contrato SDK <-> Auth API
+- [x] P1 Card 03.03 - Testes de contrato SDK <-> Auth API
   Objetivo: impedir regressao de payload/claims durante evolucao.
   Dependencias: Card 03.01 e 03.02.
+  Status atual:
+  - Suite de contrato implementada para SDK Vue (`contract-sdk-api.spec.ts`) validando refresh/session/me/logout.
+  - Esquema canonico de claims publicado em `@sigfarm/auth-contracts` (`AccessTokenClaimsSchema`).
+  - Suite de guard valida parsing tipado e cenarios de erro.
   Criterios de aceite:
   - Suite automatica quebra se contrato mudar sem versao.
   - Cobertura de fluxo feliz e erro.

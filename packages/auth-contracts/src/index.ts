@@ -82,6 +82,21 @@ export const RefreshSuccessSchema = z.object({
   meta: SuccessMetaSchema,
 });
 
+export const AccessTokenClaimsSchema = z.object({
+  sub: z.string().uuid(),
+  sid: z.string().min(1),
+  amr: AuthMethodSchema,
+  email: z.string().email(),
+  emailVerified: z.boolean(),
+  globalStatus: AuthStatusSchema,
+  apps: z.array(AppAccessSchema).default([]),
+  ver: z.number().int().positive(),
+  iat: z.number().int().optional(),
+  exp: z.number().int().optional(),
+  iss: z.string().url().optional(),
+  aud: z.union([z.string().min(1), z.array(z.string().min(1))]).optional(),
+});
+
 export type AuthStatus = z.infer<typeof AuthStatusSchema>;
 export type AuthMethod = z.infer<typeof AuthMethodSchema>;
 export type AuthErrorCode = z.infer<typeof AuthErrorCodeSchema>;
@@ -90,3 +105,4 @@ export type SessionSuccess = z.infer<typeof SessionSuccessSchema>;
 export type MeSuccess = z.infer<typeof MeSuccessSchema>;
 export type LogoutSuccess = z.infer<typeof LogoutSuccessSchema>;
 export type RefreshSuccess = z.infer<typeof RefreshSuccessSchema>;
+export type AccessTokenClaims = z.infer<typeof AccessTokenClaimsSchema>;

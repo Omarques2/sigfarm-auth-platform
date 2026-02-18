@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ErrorEnvelopeSchema,
   LogoutSuccessSchema,
+  AccessTokenClaimsSchema,
   MeSuccessSchema,
   RefreshSuccessSchema,
   SessionSuccessSchema,
@@ -94,5 +95,21 @@ describe("auth contracts v1", () => {
 
     expect(parsed.error.code).toBe("UNAUTHORIZED");
   });
-});
 
+  it("validates canonical access token claims", () => {
+    const parsed = AccessTokenClaimsSchema.parse({
+      sub: "11111111-1111-4111-8111-111111111111",
+      sid: "sess_abc",
+      amr: "password",
+      email: "user@sigfarm.com",
+      emailVerified: true,
+      globalStatus: "active",
+      apps: [{ appKey: "PBI_EMBED", roles: ["user"] }],
+      ver: 1,
+      iss: "https://auth.sigfarmintelligence.com",
+      aud: "sigfarm-apps",
+    });
+
+    expect(parsed.amr).toBe("password");
+  });
+});

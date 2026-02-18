@@ -239,9 +239,17 @@ Saida esperada: operacao segura e pronta para producao.
 - Contratos (`packages/auth-contracts`) com testes de schema.
 - Monorepo com CI (`lint`, `test`, `build`) em PR/push.
 
-### 13.2 Parcial (evitar interpretar como pronto)
-- `packages/auth-client-vue` existe, mas ainda e scaffold e nao substitui os fluxos completos dos apps consumidores.
-- `packages/auth-guard-nest` existe, mas ainda e scaffold sem guard/decorators prontos para Nest em producao.
+### 13.2 EPIC-03 concluido (SDKs prontos)
+- `packages/auth-client-vue` implementado com ciclo completo:
+  - login redirect seguro;
+  - callback/session exchange;
+  - sessao/refresh/logout;
+  - single-flight e recovery de background.
+- `packages/auth-guard-nest` implementado com:
+  - guard JWT via JWKS remoto;
+  - decorators/helpers de claims tipadas;
+  - suporte a bypass de rotas publicas por metadata.
+- Testes de contrato SDK <-> Auth API ativos (fluxo feliz + erro) e quebram em regressao de payload/claims.
 
 ### 13.3 Nao iniciado no repo atual
 - Integracao efetiva de LandWatch e pbi-embed usando SDKs finais.

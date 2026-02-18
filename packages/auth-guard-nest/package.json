@@ -7,10 +7,12 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@sigfarm/auth-contracts": "file:../auth-contracts"
+    "@nestjs/common": "^11.1.8",
+    "@sigfarm/auth-contracts": "file:../auth-contracts",
+    "jose": "^6.1.3"
   }
 }

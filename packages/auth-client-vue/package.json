@@ -7,10 +7,11 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@sigfarm/auth-contracts": "file:../auth-contracts"
+    "@sigfarm/auth-contracts": "file:../auth-contracts",
+    "zod": "^3.24.1"
   }
 }
