@@ -1,0 +1,208 @@
+{
+  "generatedAt": "2026-02-18T13:25:26.761Z",
+  "totals": {
+    "pass": 16,
+    "fail": 6,
+    "warn": 2
+  },
+  "results": [
+    {
+      "id": "AUTH-001",
+      "category": "surface",
+      "title": "Health endpoint available",
+      "status": "pass",
+      "severity": "low",
+      "evidence": "GET /health => 200"
+    },
+    {
+      "id": "AUTH-002",
+      "category": "token",
+      "title": "JWKS does not leak private key material",
+      "status": "pass",
+      "severity": "high",
+      "evidence": "GET /.well-known/jwks.json => 200; privateFields=false"
+    },
+    {
+      "id": "AUTH-003",
+      "category": "authorization",
+      "title": "Protected account endpoint blocks unauthenticated access",
+      "status": "pass",
+      "severity": "high",
+      "evidence": "GET /v1/auth/account without auth => 401"
+    },
+    {
+      "id": "AUTH-004",
+      "category": "token",
+      "title": "Forged JWT (alg=none) rejected",
+      "status": "pass",
+      "severity": "critical",
+      "evidence": "GET /v1/auth/session with forged JWT => 401"
+    },
+    {
+      "id": "AUTH-005",
+      "category": "password-policy",
+      "title": "Weak password blocked at sign-up",
+      "status": "pass",
+      "severity": "high",
+      "evidence": "POST /api/auth/sign-up/email weak password => 422, code=PASSWORD_POLICY_VIOLATION"
+    },
+    {
+      "id": "AUTH-006",
+      "category": "password-policy",
+      "title": "Weak password blocked at reset-password endpoint",
+      "status": "pass",
+      "severity": "high",
+      "evidence": "POST /api/auth/reset-password weak password => 422, code=PASSWORD_POLICY_VIOLATION"
+    },
+    {
+      "id": "AUTH-007",
+      "category": "baseline",
+      "title": "Create dedicated security test account",
+      "status": "pass",
+      "severity": "low",
+      "evidence": "POST /api/auth/sign-up/email => 200"
+    },
+    {
+      "id": "AUTH-008",
+      "category": "baseline",
+      "title": "Unverified account is blocked from email/password sign-in",
+      "status": "pass",
+      "severity": "medium",
+      "evidence": "requireEmailVerification=true; signInStatus=403"
+    },
+    {
+      "id": "AUTH-009",
+      "category": "session",
+      "title": "Arbitrary pre-auth session cookie does not grant session",
+      "status": "warn",
+      "severity": "high",
+      "evidence": "GET /api/auth/get-session with forged cookie => 200",
+      "recommendation": "Manually review session fixation protections with browser-level test if needed."
+    },
+    {
+      "id": "AUTH-010",
+      "category": "session",
+      "title": "Login succeeds and sets cookie with HttpOnly/SameSite flags",
+      "status": "pass",
+      "severity": "high",
+      "evidence": "POST /api/auth/sign-in/email => 200; httpOnly=true; sameSite=true; secure=false"
+    },
+    {
+      "id": "AUTH-011",
+      "category": "session",
+      "title": "Secure cookie flag not present",
+      "status": "warn",
+      "severity": "medium",
+      "evidence": "secureFlag=false; nodeEnv=development",
+      "recommendation": "Ensure cookies are Secure in staging/production (HTTPS only)."
+    },
+    {
+      "id": "AUTH-012",
+      "category": "authorization",
+      "title": "Authenticated session can read own account profile",
+      "status": "pass",
+      "severity": "medium",
+      "evidence": "GET /v1/auth/account => 200; email=security-1771421089328@sigfarm.test"
+    },
+    {
+      "id": "AUTH-013",
+      "category": "token",
+      "title": "Session exchange issues access and refresh tokens",
+      "status": "pass",
+      "severity": "high",
+      "evidence": "POST /v1/auth/refresh (cookie) => 200; accessLen=868; refreshLen=67"
+    },
+    {
+      "id": "AUTH-014",
+      "category": "token",
+      "title": "Refresh rotation works and reuse invalidates session chain",
+      "status": "pass",
+      "severity": "critical",
+      "evidence": "rotate=200; reuseOld=401; reuseNewAfterReuse=401"
+    },
+    {
+      "id": "AUTH-015",
+      "category": "session",
+      "title": "Bearer access is revoked after logout",
+      "status": "fail",
+      "severity": "high",
+      "evidence": "before=401; logout=200; after=401"
+    },
+    {
+      "id": "AUTH-016",
+      "category": "enumeration",
+      "title": "Email discovery endpoint leaks account existence/state",
+      "status": "fail",
+      "severity": "medium",
+      "evidence": "known=active; unknown=missing",
+      "recommendation": "Return generic state for unauthenticated discovery to reduce enumeration risk."
+    },
+    {
+      "id": "AUTH-017",
+      "category": "brute-force",
+      "title": "Password reset code verification has anti-bruteforce throttling",
+      "status": "fail",
+      "severity": "high",
+      "evidence": "verify-code status sequence=200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200",
+      "recommendation": "Add per-user/per-IP rate limiting and lockout on reset-code verification."
+    },
+    {
+      "id": "AUTH-018",
+      "category": "account-change",
+      "title": "Email change rejects same email as current",
+      "status": "pass",
+      "severity": "medium",
+      "evidence": "same email request => 200; status=same_as_current"
+    },
+    {
+      "id": "AUTH-019",
+      "category": "account-change",
+      "title": "Email change confirmation rejects invalid code",
+      "status": "fail",
+      "severity": "high",
+      "evidence": "confirm invalid code => 500; updated=undefined"
+    },
+    {
+      "id": "AUTH-020",
+      "category": "account-change",
+      "title": "Email change updates account only after valid code",
+      "status": "fail",
+      "severity": "high",
+      "evidence": "Unexpected error when validating email-change flow: \nInvalid `prisma.identityEmailToken.create()` invocation in\nC:\\Users\\Sigfarm\\Desktop\\Github\\sigfarm-auth-platform\\apps\\auth-api\\scripts\\broken-auth-assessment.ts:600:41\n\n  597 const code = \"654321\";\n  598 const newEmail = `validated-${Date.now()}@sigfarm.test`;\n  599 const tokenHash = hashOpaqueToken(`email_change:${newEmail}:${code}`, env.betterAuthSecret);\n→ 600 await prisma.identityEmailToken.create(\nInvalid input value: invalid input value for enum \"IdentityEmailTokenType\": \"email_change\"",
+      "recommendation": "Fix IdentityEmailToken enum compatibility between Prisma schema and database migration."
+    },
+    {
+      "id": "AUTH-021",
+      "category": "open-redirect",
+      "title": "Password reset rejects untrusted redirect host",
+      "status": "pass",
+      "severity": "high",
+      "evidence": "POST /api/auth/request-password-reset redirectTo=evil => 403"
+    },
+    {
+      "id": "AUTH-022",
+      "category": "brute-force",
+      "title": "Sign-in endpoint triggers lockout/rate-limit under repeated failures",
+      "status": "pass",
+      "severity": "high",
+      "evidence": "status sequence=401,401,401,429,429,429,429,429,429,429,429,429,429,429"
+    },
+    {
+      "id": "AUTH-023",
+      "category": "brute-force",
+      "title": "Rate limit resistant to X-Forwarded-For spoofing",
+      "status": "pass",
+      "severity": "high",
+      "evidence": "spoofed XFF status sequence=429,429,429,429,429,429,429,429,429,429,429,429"
+    },
+    {
+      "id": "AUTH-024",
+      "category": "cors-csrf",
+      "title": "CORS denies untrusted origins and allows trusted origin only",
+      "status": "fail",
+      "severity": "medium",
+      "evidence": "untrustedAcaOrigin=http://evil.local; trustedAcaOrigin=http://localhost:5173; trustedStatus=204",
+      "recommendation": "Restrict CORS strictly to trusted origins and credentials-aware policy."
+    }
+  ]
+}

@@ -1,0 +1,323 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum IdentityUserStatus {
+  pending
+  active
+  disabled
+}
+
+enum IdentityProvider {
+  entra
+  password
+}
+
+enum IdentityEmailTokenType {
+  verify
+  reset
+  email_change
+}
+
+model IdentityUser {
+  id              String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email           String?               @db.Citext
+  emailNormalized String?               @map("email_normalized")
+  emailVerifiedAt DateTime?             @map("email_verified_at") @db.Timestamptz(6)
+  displayName     String?               @map("display_name")
+  status          IdentityUserStatus    @default(pending)
+  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+  providers       IdentityProviderAccount[]
+  credential      IdentityCredential?
+  sessions        IdentitySession[]
+  emailTokens     IdentityEmailToken[]
+  mfaTotp         IdentityMfaTotp?
+  mfaRecoveryCodes IdentityMfaRecoveryCode[]
+  mfaChallenges   IdentityMfaChallenge[]
+  memberships     IdentityAppMembership[]
+  auditAsActor    IdentityAuditLog[]    @relation("audit_actor")
+
+  @@unique([emailNormalized], map: "identity_user_email_normalized_key")
+  @@index([status], map: "identity_user_status_idx")
+  @@map("identity_user")
+}
+
+model IdentityProviderAccount {
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId          String           @map("user_id") @db.Uuid
+  provider        IdentityProvider
+  providerSubject String           @map("provider_subject")
+  providerEmail   String?          @map("provider_email") @db.Citext
+  linkedAt        DateTime         @default(now()) @map("linked_at") @db.Timestamptz(6)
+  lastSignInAt    DateTime?        @map("last_sign_in_at") @db.Timestamptz(6)
+  user            IdentityUser     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([provider, providerSubject], map: "identity_provider_provider_subject_key")
+  @@index([userId], map: "identity_provider_user_idx")
+  @@index([provider, providerEmail], map: "identity_provider_provider_email_idx")
+  @@map("identity_provider_account")
+}
+
+model IdentityCredential {
+  userId               String       @id @map("user_id") @db.Uuid
+  passwordHashArgon2id String       @map("password_hash_argon2id")
+  passwordUpdatedAt    DateTime?    @map("password_updated_at") @db.Timestamptz(6)
+  requiresReset        Boolean      @default(false) @map("requires_reset")
+  createdAt            DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user                 IdentityUser @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("identity_credential")
+}
+
+model IdentitySession {
+  sessionId        String            @id @default(dbgenerated("gen_random_uuid()")) @map("session_id") @db.Uuid
+  userId           String            @map("user_id") @db.Uuid
+  authMethod       IdentityProvider  @default(password) @map("auth_method")
+  refreshTokenHash String            @unique @map("refresh_token_hash")
+  ip               String?
+  userAgent        String?           @map("user_agent")
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt        DateTime          @map("expires_at") @db.Timestamptz(6)
+  revokedAt        DateTime?         @map("revoked_at") @db.Timestamptz(6)
+  revokedReason    String?           @map("revoked_reason")
+  lastSeenAt       DateTime?         @map("last_seen_at") @db.Timestamptz(6)
+  user             IdentityUser      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  auditLogs        IdentityAuditLog[]
+  refreshTokens    IdentitySessionRefreshToken[]
+
+  @@index([userId, expiresAt], map: "identity_session_user_expires_idx")
+  @@index([expiresAt], map: "identity_session_expires_idx")
+  @@index([authMethod], map: "identity_session_auth_method_idx")
+  @@map("identity_session")
+}
+
+model IdentitySessionRefreshToken {
+  id        String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId String          @map("session_id") @db.Uuid
+  tokenHash String          @unique @map("token_hash")
+  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  usedAt    DateTime?       @map("used_at") @db.Timestamptz(6)
+  revokedAt DateTime?       @map("revoked_at") @db.Timestamptz(6)
+  session   IdentitySession @relation(fields: [sessionId], references: [sessionId], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([sessionId], map: "identity_session_refresh_session_idx")
+  @@index([usedAt], map: "identity_session_refresh_used_idx")
+  @@map("identity_session_refresh_token")
+}
+
+model IdentityEmailToken {
+  id        String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String                 @map("user_id") @db.Uuid
+  tokenType IdentityEmailTokenType @map("token_type")
+  tokenHash String                 @map("token_hash")
+  expiresAt DateTime               @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime?              @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  user      IdentityUser           @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([tokenType, tokenHash], map: "identity_email_token_type_hash_key")
+  @@index([userId, tokenType], map: "identity_email_token_user_type_idx")
+  @@index([expiresAt], map: "identity_email_token_expires_idx")
+  @@map("identity_email_token")
+}
+
+model IdentityMfaTotp {
+  userId           String       @id @map("user_id") @db.Uuid
+  secretCiphertext String       @map("secret_ciphertext")
+  secretIv         String       @map("secret_iv")
+  secretTag        String       @map("secret_tag")
+  enabledAt        DateTime?    @map("enabled_at") @db.Timestamptz(6)
+  lastVerifiedAt   DateTime?    @map("last_verified_at") @db.Timestamptz(6)
+  disabledAt       DateTime?    @map("disabled_at") @db.Timestamptz(6)
+  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user             IdentityUser @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([enabledAt], map: "identity_mfa_totp_enabled_idx")
+  @@map("identity_mfa_totp")
+}
+
+model IdentityMfaRecoveryCode {
+  id        String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String       @map("user_id") @db.Uuid
+  codeHash  String       @unique @map("code_hash")
+  usedAt    DateTime?    @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  user      IdentityUser @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([userId, usedAt], map: "identity_mfa_recovery_user_used_idx")
+  @@map("identity_mfa_recovery_code")
+}
+
+model IdentityMfaChallenge {
+  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String       @map("user_id") @db.Uuid
+  challengeHash String       @unique @map("challenge_hash")
+  expiresAt     DateTime     @map("expires_at") @db.Timestamptz(6)
+  verifiedAt    DateTime?    @map("verified_at") @db.Timestamptz(6)
+  methodUsed    String?      @map("method_used")
+  ip            String?
+  userAgent     String?      @map("user_agent")
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  user          IdentityUser @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([userId, expiresAt], map: "identity_mfa_challenge_user_expires_idx")
+  @@index([expiresAt], map: "identity_mfa_challenge_expires_idx")
+  @@map("identity_mfa_challenge")
+}
+
+model IdentityAuditLog {
+  id          String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  eventType   String          @map("event_type")
+  actorUserId String?         @map("actor_user_id") @db.Uuid
+  sessionId   String?         @map("session_id") @db.Uuid
+  payload     Json?
+  ip          String?
+  userAgent   String?         @map("user_agent")
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  actor       IdentityUser?   @relation("audit_actor", fields: [actorUserId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  session     IdentitySession? @relation(fields: [sessionId], references: [sessionId], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([eventType, createdAt], map: "identity_audit_event_created_idx")
+  @@index([actorUserId, createdAt], map: "identity_audit_actor_created_idx")
+  @@index([sessionId], map: "identity_audit_session_idx")
+  @@map("identity_audit_log")
+}
+
+model IdentityApplication {
+  id          String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  appKey      String                @unique @map("app_key")
+  name        String
+  isActive    Boolean               @default(true) @map("is_active")
+  createdAt   DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+  roles       IdentityRole[]
+  memberships IdentityAppMembership[]
+
+  @@map("identity_application")
+}
+
+model IdentityRole {
+  id            String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  applicationId String                    @map("application_id") @db.Uuid
+  roleKey       String                    @map("role_key")
+  name          String
+  isSystem      Boolean                   @default(true) @map("is_system")
+  createdAt     DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  application   IdentityApplication       @relation(fields: [applicationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  assignments   IdentityAppRoleAssignment[]
+
+  @@unique([applicationId, roleKey], map: "identity_role_application_role_key")
+  @@index([applicationId], map: "identity_role_application_idx")
+  @@map("identity_role")
+}
+
+model IdentityAppMembership {
+  id            String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String                    @map("user_id") @db.Uuid
+  applicationId String                    @map("application_id") @db.Uuid
+  globalStatus  IdentityUserStatus        @default(pending) @map("global_status")
+  createdAt     DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user          IdentityUser              @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  application   IdentityApplication       @relation(fields: [applicationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  roles         IdentityAppRoleAssignment[]
+
+  @@unique([userId, applicationId], map: "identity_app_membership_user_application_key")
+  @@index([applicationId], map: "identity_app_membership_application_idx")
+  @@index([userId], map: "identity_app_membership_user_idx")
+  @@index([applicationId, globalStatus], map: "identity_app_membership_app_status_idx")
+  @@map("identity_app_membership")
+}
+
+model IdentityAppRoleAssignment {
+  id           String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  membershipId String                @map("membership_id") @db.Uuid
+  roleId       String                @map("role_id") @db.Uuid
+  createdAt    DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  membership   IdentityAppMembership @relation(fields: [membershipId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  role         IdentityRole          @relation(fields: [roleId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([membershipId, roleId], map: "identity_app_role_assignment_membership_role_key")
+  @@index([roleId], map: "identity_app_role_assignment_role_idx")
+  @@map("identity_app_role_assignment")
+}
+
+model User {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name          String
+  email         String    @db.Citext
+  emailVerified Boolean   @default(false) @map("email_verified")
+  image         String?
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  sessions      Session[]
+  accounts      Account[]
+
+  @@unique([email], map: "auth_user_email_key")
+  @@map("auth_user")
+}
+
+model Session {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  token     String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  ipAddress String?  @map("ip_address")
+  userAgent String?  @map("user_agent")
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([token], map: "auth_session_token_key")
+  @@index([userId], map: "auth_session_user_idx")
+  @@map("auth_session")
+}
+
+model Account {
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  accountId             String    @map("account_id")
+  providerId            String    @map("provider_id")
+  userId                String    @map("user_id") @db.Uuid
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  accessToken           String?   @map("access_token")
+  refreshToken          String?   @map("refresh_token")
+  idToken               String?   @map("id_token")
+  accessTokenExpiresAt  DateTime? @map("access_token_expires_at") @db.Timestamptz(6)
+  refreshTokenExpiresAt DateTime? @map("refresh_token_expires_at") @db.Timestamptz(6)
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([userId], map: "auth_account_user_idx")
+  @@index([providerId, accountId], map: "auth_account_provider_subject_idx")
+  @@map("auth_account")
+}
+
+model Verification {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  identifier String
+  value      String
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([identifier], map: "auth_verification_identifier_idx")
+  @@map("auth_verification")
+}
+
+model RateLimit {
+  id          String @id @default(dbgenerated("gen_random_uuid()::text"))
+  key         String @unique
+  count       Int
+  lastRequest BigInt @map("last_request")
+
+  @@map("auth_rate_limit")
+}
