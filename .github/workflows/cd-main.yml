@@ -99,8 +99,24 @@ jobs:
           registryPassword: ${{ secrets.AZURE_CONTAINER_REGISTRY_PASSWORD }}
 
       - name: Health check (staging)
+        env:
+          API_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
         run: |
-          curl --fail --show-error --silent "${{ secrets.STAGING_API_BASE_URL }}/health"
+          if [ -z "$API_BASE_URL" ]; then
+            echo "Missing STAGING_API_BASE_URL secret" >&2
+            exit 1
+          fi
+          API_BASE_URL="${API_BASE_URL%/}"
+          for i in {1..18}; do
+            if curl --fail --show-error --silent "$API_BASE_URL/health" >/dev/null; then
+              echo "Health check OK"
+              exit 0
+            fi
+            echo "Health check attempt $i/18 failed; waiting 10s..."
+            sleep 10
+          done
+          echo "Health check failed after retries" >&2
+          exit 1
 
   api-prod:
     runs-on: ubuntu-latest
@@ -143,14 +159,30 @@ jobs:
           registryPassword: ${{ secrets.AZURE_CONTAINER_REGISTRY_PASSWORD }}
 
       - name: Health check (prod)
+        env:
+          API_BASE_URL: ${{ secrets.PROD_API_BASE_URL }}
         run: |
-          curl --fail --show-error --silent "${{ secrets.PROD_API_BASE_URL }}/health"
+          if [ -z "$API_BASE_URL" ]; then
+            echo "Missing PROD_API_BASE_URL secret" >&2
+            exit 1
+          fi
+          API_BASE_URL="${API_BASE_URL%/}"
+          for i in {1..18}; do
+            if curl --fail --show-error --silent "$API_BASE_URL/health" >/dev/null; then
+              echo "Health check OK"
+              exit 0
+            fi
+            echo "Health check attempt $i/18 failed; waiting 10s..."
+            sleep 10
+          done
+          echo "Health check failed after retries" >&2
+          exit 1
 
   web-staging:
     runs-on: ubuntu-latest
     environment: staging
     env:
-      NODE_VERSION: "22.0.0"
+      NODE_VERSION: "22.22.0"
       VITE_AUTH_API_BASE_URL: ${{ secrets.VITE_AUTH_API_BASE_URL_STAGING }}
       VITE_AUTH_WEB_BASE_URL: ${{ secrets.VITE_AUTH_WEB_BASE_URL_STAGING }}
       VITE_AUTH_ALLOWED_RETURN_ORIGINS: ${{ secrets.VITE_AUTH_ALLOWED_RETURN_ORIGINS_STAGING }}
@@ -173,7 +205,7 @@ jobs:
     needs: [web-staging, api-prod]
     environment: production
     env:
-      NODE_VERSION: "22.0.0"
+      NODE_VERSION: "22.22.0"
       VITE_AUTH_API_BASE_URL: ${{ secrets.VITE_AUTH_API_BASE_URL_PROD }}
       VITE_AUTH_WEB_BASE_URL: ${{ secrets.VITE_AUTH_WEB_BASE_URL_PROD }}
       VITE_AUTH_ALLOWED_RETURN_ORIGINS: ${{ secrets.VITE_AUTH_ALLOWED_RETURN_ORIGINS_PROD }}
@@ -190,4 +222,3 @@ jobs:
           action: "upload"
           app_location: "apps/auth-web"
           output_location: "dist"
-
