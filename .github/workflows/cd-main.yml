@@ -1,0 +1,193 @@
+name: CD Main
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+concurrency:
+  group: cd-main
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/sigfarm-auth-api
+
+jobs:
+  api-build:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      image_digest: ${{ steps.meta.outputs.image_digest }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Normalize image name
+        shell: bash
+        run: |
+          echo "IMAGE_NAME=${GITHUB_REPOSITORY_OWNER,,}/sigfarm-auth-api" >> "$GITHUB_ENV"
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push API image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./apps/auth-api/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Set image outputs
+        id: meta
+        shell: bash
+        run: |
+          echo "image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "image_digest=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
+  api-staging:
+    runs-on: ubuntu-latest
+    needs: api-build
+    environment: staging
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install
+        run: npm ci
+
+      - name: Generate Prisma Client
+        run: npm run prisma:generate --workspace @sigfarm/auth-api
+
+      - name: Migrate DB (staging)
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        run: npm run db:migrate:deploy --workspace @sigfarm/auth-api
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy API to Azure Container Apps (staging)
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          containerAppName: ${{ secrets.AZURE_CONTAINER_APP_NAME_STAGING }}
+          resourceGroup: ${{ secrets.AZURE_RESOURCE_GROUP }}
+          imageToDeploy: ${{ needs.api-build.outputs.image }}
+          registryUrl: ${{ env.REGISTRY }}
+          registryUsername: ${{ secrets.AZURE_CONTAINER_REGISTRY_USERNAME }}
+          registryPassword: ${{ secrets.AZURE_CONTAINER_REGISTRY_PASSWORD }}
+
+      - name: Health check (staging)
+        run: |
+          curl --fail --show-error --silent "${{ secrets.STAGING_API_BASE_URL }}/health"
+
+  api-prod:
+    runs-on: ubuntu-latest
+    needs: [api-staging, api-build]
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install
+        run: npm ci
+
+      - name: Generate Prisma Client
+        run: npm run prisma:generate --workspace @sigfarm/auth-api
+
+      - name: Migrate DB (prod)
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: npm run db:migrate:deploy --workspace @sigfarm/auth-api
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy API to Azure Container Apps (prod)
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          containerAppName: ${{ secrets.AZURE_CONTAINER_APP_NAME_PROD }}
+          resourceGroup: ${{ secrets.AZURE_RESOURCE_GROUP }}
+          imageToDeploy: ${{ needs.api-build.outputs.image_digest }}
+          registryUrl: ${{ env.REGISTRY }}
+          registryUsername: ${{ secrets.AZURE_CONTAINER_REGISTRY_USERNAME }}
+          registryPassword: ${{ secrets.AZURE_CONTAINER_REGISTRY_PASSWORD }}
+
+      - name: Health check (prod)
+        run: |
+          curl --fail --show-error --silent "${{ secrets.PROD_API_BASE_URL }}/health"
+
+  web-staging:
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      NODE_VERSION: "22.0.0"
+      VITE_AUTH_API_BASE_URL: ${{ secrets.VITE_AUTH_API_BASE_URL_STAGING }}
+      VITE_AUTH_WEB_BASE_URL: ${{ secrets.VITE_AUTH_WEB_BASE_URL_STAGING }}
+      VITE_AUTH_ALLOWED_RETURN_ORIGINS: ${{ secrets.VITE_AUTH_ALLOWED_RETURN_ORIGINS_STAGING }}
+      VITE_AUTH_DEFAULT_RETURN_TO: ${{ secrets.VITE_AUTH_DEFAULT_RETURN_TO_STAGING }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy auth-web to Azure Static Web Apps (staging)
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_STAGING }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: "upload"
+          app_location: "apps/auth-web"
+          output_location: "dist"
+
+  web-prod:
+    runs-on: ubuntu-latest
+    needs: [web-staging, api-prod]
+    environment: production
+    env:
+      NODE_VERSION: "22.0.0"
+      VITE_AUTH_API_BASE_URL: ${{ secrets.VITE_AUTH_API_BASE_URL_PROD }}
+      VITE_AUTH_WEB_BASE_URL: ${{ secrets.VITE_AUTH_WEB_BASE_URL_PROD }}
+      VITE_AUTH_ALLOWED_RETURN_ORIGINS: ${{ secrets.VITE_AUTH_ALLOWED_RETURN_ORIGINS_PROD }}
+      VITE_AUTH_DEFAULT_RETURN_TO: ${{ secrets.VITE_AUTH_DEFAULT_RETURN_TO_PROD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy auth-web to Azure Static Web Apps (prod)
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_PROD }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: "upload"
+          app_location: "apps/auth-web"
+          output_location: "dist"
+
