@@ -348,6 +348,13 @@ async function requestResetCode(input?: { force?: boolean }): Promise<void> {
   resetFlow.error = "";
   try {
     const result = await authApiClient.requestPasswordResetCode(resetFlow.email);
+    if (result.status === "missing") {
+      stopResetCountdown();
+      resetFlow.notice = "";
+      step.value = "email";
+      flashError.value = "Este email nao possui conta cadastrada.";
+      return;
+    }
     const nextCooldown = Math.max(1, result.retryAfterSeconds || 60);
     startResetCountdown(nextCooldown);
     resetFlow.notice =

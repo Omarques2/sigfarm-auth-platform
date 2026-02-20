@@ -6,11 +6,21 @@ Plataforma central de autenticacao e sessao da Sigfarm, usada por multiplas apli
 
 Este repositorio concentra:
 
-1. auth API central (`apps/auth-api`) com Better Auth, JWT proprio, JWKS, email/senha e login Microsoft.
+1. auth API central (`apps/auth-api`) com Better Auth, JWT proprio, JWKS, email/senha e login social (Microsoft e Google).
 2. auth web central (`apps/auth-web`) com `/login`, `/verify-email`, `/reset-password`, `/my-account`.
 3. contratos de auth (`packages/auth-contracts`) para claims e envelopes padrao.
 4. SDK frontend (`packages/auth-client-vue`) para login/callback/sessao/refresh/logout.
 5. SDK backend (`packages/auth-guard-nest`) para validacao JWT e claims tipadas em Nest.
+
+## Fluxos suportados
+
+1. login com email/senha.
+2. login com Microsoft (Entra ID).
+3. login com Google.
+4. verificacao de email.
+5. recuperacao e reset de senha.
+6. sessao centralizada com refresh token.
+7. account linking (email/senha + social com mesmo email).
 
 ## Estrutura
 
@@ -38,7 +48,12 @@ npm install
 
 ```bash
 cp .env.example apps/auth-api/.env
+cp apps/auth-web/.env.example apps/auth-web/.env
 ```
+
+Observacao:
+
+1. se a API rodar em porta diferente (ex.: `3001`), ajuste `VITE_AUTH_API_BASE_URL` em `apps/auth-web/.env`.
 
 3. Aplicar migrations e seed:
 
@@ -53,6 +68,15 @@ npm run db:seed --workspace @sigfarm/auth-api
 npm run dev --workspace @sigfarm/auth-api
 npm run dev --workspace @sigfarm/auth-web
 ```
+
+## Dominios e URLs (staging/prod)
+
+1. auth web (portal): `testauth.sigfarmintelligence.com` e `auth.sigfarmintelligence.com`.
+2. auth api: `api-testauth.sigfarmintelligence.com` e `api-auth.sigfarmintelligence.com`.
+3. nos apps consumidores:
+   - `authPortalBaseUrl` deve apontar para auth web.
+   - `authApiBaseUrl` deve apontar para auth api.
+4. JWKS para validacao de token deve ser sempre da auth api (`/.well-known/jwks.json`).
 
 ## Scripts principais
 

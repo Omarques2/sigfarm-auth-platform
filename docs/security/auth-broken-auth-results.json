@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-02-18T16:13:52.234Z",
+  "generatedAt": "2026-02-20T12:53:49.062Z",
   "totals": {
     "pass": 22,
     "fail": 0,
@@ -102,7 +102,7 @@
       "title": "Authenticated session can read own account profile",
       "status": "pass",
       "severity": "medium",
-      "evidence": "GET /v1/auth/account => 200; email=security-1771431196520@sigfarm.test"
+      "evidence": "GET /v1/auth/account => 200; email=security-1771591993889@sigfarm.test"
     },
     {
       "id": "AUTH-013",
@@ -166,7 +166,7 @@
       "title": "Email change updates account only after valid code",
       "status": "pass",
       "severity": "high",
-      "evidence": "confirm=200; updated=true; accountEmail=validated-1771431225550@sigfarm.test"
+      "evidence": "confirm=200; updated=true; accountEmail=validated-1771592022804@sigfarm.test"
     },
     {
       "id": "AUTH-021",

@@ -200,6 +200,26 @@ describe("AuthApiClient", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it("handles missing account when requesting reset code", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockJsonResponse(200, {
+        data: {
+          status: "missing",
+          retryAfterSeconds: 0,
+        },
+      }),
+    );
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const client = new AuthApiClient({
+      authApiBaseUrl: "https://auth.sigfarmintelligence.com",
+    });
+
+    const requested = await client.requestPasswordResetCode("missing@sigfarm.com");
+    expect(requested.status).toBe("missing");
+    expect(requested.retryAfterSeconds).toBe(0);
+  });
+
   it("calls sign-out endpoint", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       mockJsonResponse(200, {

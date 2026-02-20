@@ -222,9 +222,15 @@ function buildDependencies(): AppDependencies {
           retryAfterSeconds: 0,
         };
       },
-      async requestPasswordResetCode() {
+      async requestPasswordResetCode(input) {
+        if (input.email !== "user@sigfarm.com") {
+          return {
+            status: "missing" as const,
+            retryAfterSeconds: 0,
+          };
+        }
         return {
-          status: "sent",
+          status: "sent" as const,
           retryAfterSeconds: 60,
         };
       },
@@ -475,6 +481,16 @@ describe("auth-api epic-02", () => {
 
   it("requests, verifies and completes password reset code flow", async () => {
     const app = await buildServer({ dependencies: buildDependencies() });
+
+    const requestMissing = await app.inject({
+      method: "POST",
+      url: "/v1/auth/password-reset/request-code",
+      payload: {
+        email: "missing@sigfarm.com",
+      },
+    });
+    expect(requestMissing.statusCode).toBe(200);
+    expect(requestMissing.json().data.status).toBe("missing");
 
     const requestCode = await app.inject({
       method: "POST",

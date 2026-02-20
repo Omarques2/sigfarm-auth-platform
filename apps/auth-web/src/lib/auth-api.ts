@@ -62,7 +62,7 @@ type DiscoverEmailResponse = {
 };
 
 type RequestPasswordResetCodeResponse = {
-  status: "sent" | "cooldown";
+  status: "sent" | "cooldown" | "missing";
   retryAfterSeconds: number;
 };
 

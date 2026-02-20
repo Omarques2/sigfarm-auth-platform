@@ -20,7 +20,7 @@ export type PasswordResetRequestInput = {
 };
 
 export type PasswordResetRequestResult = {
-  status: "sent" | "cooldown";
+  status: "sent" | "cooldown" | "missing";
   retryAfterSeconds: number;
 };
 
@@ -155,8 +155,8 @@ export class PrismaAccountFlowService implements AccountFlowService {
 
     if (!user) {
       return {
-        status: "sent",
-        retryAfterSeconds: this.resendCooldownSeconds,
+        status: "missing",
+        retryAfterSeconds: 0,
       };
     }
 

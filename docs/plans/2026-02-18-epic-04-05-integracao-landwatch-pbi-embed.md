@@ -4,7 +4,7 @@
 
 **Goal:** integrar LandWatch e pbi-embed ao `sigfarm-auth-platform` usando os SDKs compartilhados (`@sigfarm/auth-client-vue` e `@sigfarm/auth-guard-nest`) com foco em seguranca, sem retrabalho e com cutover rapido.
 
-**Architecture:** os produtos deixam de autenticar diretamente no Microsoft Entra. O login passa pelo `auth.sigfarmintelligence.com` (auth-web + auth-api), que emite token proprio (JWT RS256) e sessao centralizada. Cada produto continua com autorizacao local (membership, customer, admin), mas com identidade canonica `identity_user_id` em vez de `entra_sub`.
+**Architecture:** os produtos deixam de autenticar diretamente nos IdPs (Microsoft/Google). O login passa pelo auth portal (`auth-web`) e pela auth API (`auth-api`), que emitem sessao centralizada + token proprio (JWT RS256). Cada produto continua com autorizacao local (membership, customer, admin), mas com identidade canonica `identity_user_id` em vez de `entra_sub`.
 
 **Tech Stack:** Vue 3 + Vite (frontends), NestJS + Prisma (backends), Better Auth, jose, PostgreSQL.
 
@@ -27,6 +27,16 @@ Se for executar com Codex:
 3. Mantenha `sigfarm-auth-platform` aberto em paralelo apenas para referencia de contrato/SDK.
 
 Tambem funciona a partir do repo atual com caminhos absolutos, mas nao e recomendado para mudancas grandes em outro repositorio.
+
+---
+
+## 0.1 Estado atual validado (2026-02-20)
+
+1. Auth web e auth API operam em hosts separados no staging/prod (ex.: `testauth...` e `api-testauth...`).
+2. Login central suporta email/senha, Microsoft e Google no auth portal.
+3. Produtos consumidores nao devem implementar OAuth local; apenas redirecionar para o auth portal.
+4. Fluxo canonicamente suportado continua: `login -> callback -> exchangeSession -> me`.
+5. 2FA esta fora do escopo atual.
 
 ---
 
@@ -63,6 +73,11 @@ Claims esperadas (access token):
 6. `apps[]`.
 7. `ver`.
 
+Nota importante:
+
+1. consumidores nao devem inferir provedor social diretamente pelo `amr` para regras de negocio;
+2. regras de autorizacao devem depender de `sub`, `globalStatus`, `apps` e dados locais do produto.
+
 ## 2.2 Fluxo de sessao
 
 Fonte canonica: `packages/auth-client-vue/src/auth-client.ts`.
@@ -70,18 +85,19 @@ Fonte canonica: `packages/auth-client-vue/src/auth-client.ts`.
 Fluxo obrigatorio:
 
 1. app redireciona para `/login` do auth portal com `returnTo`.
-2. auth portal autentica usuario.
+2. auth portal autentica usuario (email/senha, Microsoft ou Google).
 3. callback do produto executa `exchangeSession` (`POST /v1/auth/refresh` com cookie) e recebe access+refresh.
 4. frontend usa `authFetch`/`getAccessToken` para chamadas autenticadas.
 5. backend do produto valida JWT via JWKS da auth platform.
 
-## 2.3 Nao voltar para token Entra nos produtos
+## 2.3 Nao voltar para OAuth direto nos produtos
 
 Depois da migracao:
 
 1. frontend do produto nao depende de `@azure/msal-browser`.
-2. backend do produto nao valida issuer/audience do Entra.
-3. validacao sempre contra `AUTH_JWT_ISSUER`, `AUTH_JWT_AUDIENCE`, `/.well-known/jwks.json` da auth platform.
+2. frontend do produto nao implementa OAuth Google local.
+3. backend do produto nao valida issuer/audience direto do Entra/Google.
+4. validacao sempre contra `AUTH_JWT_ISSUER`, `AUTH_JWT_AUDIENCE`, `/.well-known/jwks.json` da auth platform.
 
 ---
 
@@ -95,6 +111,10 @@ Depois da migracao:
    - `apps/auth-api` (`/health`, `/v1/auth/refresh`, `/.well-known/jwks.json`).
    - `apps/auth-web` (`/login`, `/verify-email`, `/reset-password`, `/my-account`).
 4. Banco auth com migrations aplicadas e seed executado.
+5. Staging/prod com custom domains configurados para evitar problema de sessao/cookie cross-site:
+   - auth web: `testauth.sigfarmintelligence.com` / `auth.sigfarmintelligence.com`
+   - auth api: `api-testauth.sigfarmintelligence.com` / `api-auth.sigfarmintelligence.com`
+6. Redirect URIs dos provedores sociais apontando para callback da auth API (`/api/auth/callback/<provider>`).
 
 ## 3.2 Variaveis de referencia (auth platform)
 
@@ -103,6 +123,8 @@ Depois da migracao:
 3. `AUTH_JWT_KID`.
 4. `BETTER_AUTH_BASE_URL`.
 5. `BETTER_AUTH_TRUSTED_ORIGINS`.
+6. `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET`, `ENTRA_TENANT_ID`.
+7. `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`.
 
 ## 3.3 Gate de seguranca antes de integrar apps
 
@@ -179,8 +201,8 @@ Instalar nos produtos apontando para os `.tgz` gerados.
    - instalar `@sigfarm/auth-client-vue` e `@sigfarm/auth-contracts`.
 3. Criar modulo unico de auth client (ex.: `apps/web/src/auth/sigfarm-auth.ts`) com:
    - `createAuthClient`.
-   - `authApiBaseUrl` = `https://auth.sigfarmintelligence.com` (ou dev local).
-   - `authPortalBaseUrl` = `https://auth.sigfarmintelligence.com`.
+   - `authApiBaseUrl` = `https://api-auth.sigfarmintelligence.com` (ou dev/staging equivalente).
+   - `authPortalBaseUrl` = `https://auth.sigfarmintelligence.com` (ou dev/staging equivalente).
    - `appBaseUrl` = origem do LandWatch.
    - `allowedReturnOrigins`.
    - `defaultReturnTo` = `https://landwatch.../`.
@@ -485,11 +507,32 @@ npm run test --prefix apps/api
 
 Adicionar:
 
-1. `VITE_SIGFARM_AUTH_API_BASE_URL=https://auth.sigfarmintelligence.com`
-2. `VITE_SIGFARM_AUTH_PORTAL_BASE_URL=https://auth.sigfarmintelligence.com`
-3. `VITE_SIGFARM_APP_BASE_URL=https://<app>.sigfarmintelligence.com`
-4. `VITE_SIGFARM_AUTH_ALLOWED_RETURN_ORIGINS=https://<app>.sigfarmintelligence.com,https://auth.sigfarmintelligence.com`
-5. `VITE_SIGFARM_AUTH_DEFAULT_RETURN_TO=https://<app>.sigfarmintelligence.com/`
+1. `VITE_SIGFARM_AUTH_API_BASE_URL`
+2. `VITE_SIGFARM_AUTH_PORTAL_BASE_URL`
+3. `VITE_SIGFARM_APP_BASE_URL`
+4. `VITE_SIGFARM_AUTH_ALLOWED_RETURN_ORIGINS`
+5. `VITE_SIGFARM_AUTH_DEFAULT_RETURN_TO`
+
+Valores recomendados:
+
+1. `staging`:
+   - `VITE_SIGFARM_AUTH_API_BASE_URL=https://api-testauth.sigfarmintelligence.com`
+   - `VITE_SIGFARM_AUTH_PORTAL_BASE_URL=https://testauth.sigfarmintelligence.com`
+   - `VITE_SIGFARM_APP_BASE_URL=https://<app-staging>.sigfarmintelligence.com`
+   - `VITE_SIGFARM_AUTH_ALLOWED_RETURN_ORIGINS=https://<app-staging>.sigfarmintelligence.com,https://testauth.sigfarmintelligence.com`
+   - `VITE_SIGFARM_AUTH_DEFAULT_RETURN_TO=https://<app-staging>.sigfarmintelligence.com/`
+2. `production`:
+   - `VITE_SIGFARM_AUTH_API_BASE_URL=https://api-auth.sigfarmintelligence.com`
+   - `VITE_SIGFARM_AUTH_PORTAL_BASE_URL=https://auth.sigfarmintelligence.com`
+   - `VITE_SIGFARM_APP_BASE_URL=https://<app>.sigfarmintelligence.com`
+   - `VITE_SIGFARM_AUTH_ALLOWED_RETURN_ORIGINS=https://<app>.sigfarmintelligence.com,https://auth.sigfarmintelligence.com`
+   - `VITE_SIGFARM_AUTH_DEFAULT_RETURN_TO=https://<app>.sigfarmintelligence.com/`
+
+Regras:
+
+1. sempre usar URL completa com protocolo (`https://`).
+2. nao colocar espacos na lista CSV de `VITE_SIGFARM_AUTH_ALLOWED_RETURN_ORIGINS`.
+3. `VITE_SIGFARM_AUTH_API_BASE_URL` deve apontar para a auth API (nao para auth web).
 
 Remover/deprecar:
 
@@ -502,9 +545,24 @@ Remover/deprecar:
 
 Adicionar:
 
-1. `SIGFARM_AUTH_ISSUER=https://auth.sigfarmintelligence.com`
-2. `SIGFARM_AUTH_AUDIENCE=sigfarm-apps`
-3. `SIGFARM_AUTH_JWKS_URL=https://auth.sigfarmintelligence.com/.well-known/jwks.json`
+1. `SIGFARM_AUTH_ISSUER` (usar exatamente o valor de `AUTH_JWT_ISSUER` configurado na auth API)
+2. `SIGFARM_AUTH_AUDIENCE` (igual ao `AUTH_JWT_AUDIENCE`, default `sigfarm-apps`)
+3. `SIGFARM_AUTH_JWKS_URL` (endpoint JWKS da auth API)
+
+Valores recomendados:
+
+1. `staging`:
+   - `SIGFARM_AUTH_ISSUER=https://testauth.sigfarmintelligence.com`
+   - `SIGFARM_AUTH_AUDIENCE=sigfarm-apps`
+   - `SIGFARM_AUTH_JWKS_URL=https://api-testauth.sigfarmintelligence.com/.well-known/jwks.json`
+2. `production`:
+   - `SIGFARM_AUTH_ISSUER=https://auth.sigfarmintelligence.com`
+   - `SIGFARM_AUTH_AUDIENCE=sigfarm-apps`
+   - `SIGFARM_AUTH_JWKS_URL=https://api-auth.sigfarmintelligence.com/.well-known/jwks.json`
+
+Regra:
+
+1. nao apontar `SIGFARM_AUTH_JWKS_URL` para o dominio do auth web.
 
 Manter por enquanto (nao bloquear boot):
 
@@ -518,18 +576,21 @@ Manter por enquanto (nao bloquear boot):
 
 1. sem sessao -> rota privada redireciona login central.
 2. login email/senha -> callback -> `/v1/users/me` -> dashboard.
-3. logout -> volta para login sem loop.
-4. refresh token funciona apos expirar access token.
-5. usuario pending fica em `/pending`.
-6. usuario disabled recebe bloqueio consistente.
+3. login Microsoft -> callback -> sessao ativa.
+4. login Google -> callback -> sessao ativa.
+5. logout -> volta para login sem loop.
+6. refresh token funciona apos expirar access token.
+7. usuario pending fica em `/pending`.
+8. usuario disabled recebe bloqueio consistente.
 
 ## 8.2 Smoke pbi-embed
 
 1. sem sessao -> `/app` redireciona para login central.
 2. usuario ativo com membership -> `/app` abre.
-3. usuario admin -> `/admin` abre.
-4. usuario ativo sem membership e sem admin -> `/pending`.
-5. logout encerra sessao e bloqueia acesso.
+3. login social (Microsoft ou Google) conclui callback sem erro.
+4. usuario admin -> `/admin` abre.
+5. usuario ativo sem membership e sem admin -> `/pending`.
+6. logout encerra sessao e bloqueia acesso.
 
 ## 8.3 Seguranca minima
 
@@ -539,6 +600,8 @@ Manter por enquanto (nao bloquear boot):
 4. issuer errado rejeitado.
 5. open redirect bloqueado em `returnTo`.
 6. nenhuma rota privada acessivel sem bearer valido.
+7. callback nao entra em loop de "sessao nao encontrada" em staging/prod.
+8. email ja existente entre password/social realiza account linking (mesma identidade global).
 
 ---
 
@@ -623,4 +686,3 @@ Regras:
 6. `packages/auth-contracts/src/index.ts`
 7. `docs/security/authentication-assessment-2026-02-18.md`
 8. `docs/security/iso-27002-2022-auth-mapping-2026-02-18.md`
-
