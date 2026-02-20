@@ -90,7 +90,9 @@ type SignInWithMicrosoftInput = {
   errorCallbackURL: string;
 };
 
-type SignInWithMicrosoftResult = {
+type SocialProvider = "microsoft" | "google";
+
+type SignInWithSocialResult = {
   url?: string;
   redirect: boolean;
 };
@@ -267,17 +269,28 @@ export class AuthApiClient {
   }
 
   async startMicrosoftSignIn(input: SignInWithMicrosoftInput): Promise<string> {
-    const response = await this.request<SignInWithMicrosoftResult>("/sign-in/social", {
+    return await this.startSocialSignIn("microsoft", input);
+  }
+
+  async startGoogleSignIn(input: SignInWithMicrosoftInput): Promise<string> {
+    return await this.startSocialSignIn("google", input);
+  }
+
+  private async startSocialSignIn(
+    provider: SocialProvider,
+    input: SignInWithMicrosoftInput,
+  ): Promise<string> {
+    const response = await this.request<SignInWithSocialResult>("/sign-in/social", {
       method: "POST",
       body: {
-        provider: "microsoft",
+        provider,
         callbackURL: input.callbackURL,
         errorCallbackURL: input.errorCallbackURL,
         disableRedirect: true,
       },
     });
     if (!response.url) {
-      throw new Error("Microsoft sign-in endpoint did not return redirect URL");
+      throw new Error(`${provider} sign-in endpoint did not return redirect URL`);
     }
     return response.url;
   }

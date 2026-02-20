@@ -43,6 +43,39 @@ describe("AuthApiClient", () => {
     expect(requestInit.method).toBe("POST");
   });
 
+  it("requests google social sign-in URL via Better Auth endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockJsonResponse(200, {
+        redirect: false,
+        url: "https://accounts.google.com/o/oauth2/v2/auth",
+      }),
+    );
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const client = new AuthApiClient({
+      authApiBaseUrl: "https://auth.sigfarmintelligence.com",
+    });
+
+    const url = await client.startGoogleSignIn({
+      callbackURL: "https://auth.sigfarmintelligence.com/auth/callback",
+      errorCallbackURL: "https://auth.sigfarmintelligence.com/auth/callback",
+    });
+
+    expect(url).toBe("https://accounts.google.com/o/oauth2/v2/auth");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [requestUrl, requestInit] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(requestUrl.toString()).toBe("https://auth.sigfarmintelligence.com/api/auth/sign-in/social");
+    expect(requestInit.method).toBe("POST");
+    expect(requestInit.body).toBe(
+      JSON.stringify({
+        provider: "google",
+        callbackURL: "https://auth.sigfarmintelligence.com/auth/callback",
+        errorCallbackURL: "https://auth.sigfarmintelligence.com/auth/callback",
+        disableRedirect: true,
+      }),
+    );
+  });
+
   it("returns null session on unauthorized response", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       mockJsonResponse(401, {

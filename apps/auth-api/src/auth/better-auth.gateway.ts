@@ -8,6 +8,7 @@ import type { AppEnv } from "../config/env.js";
 import type { EmailProvider } from "../email/email.provider.js";
 import type { AuditEventInput, AuditService } from "./audit.service.js";
 import type { AuthUser, IdentityService } from "./identity.service.js";
+import { mapMicrosoftProfileToUser } from "./microsoft-profile.js";
 import {
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
@@ -38,16 +39,26 @@ export function createBetterAuthGateway(options: CreateAuthGatewayOptions): Auth
     options.env.betterAuthTrustedOrigins,
     options.env.betterAuthBaseUrl,
   );
-  const socialProviders =
-    options.env.entraClientId && options.env.entraClientSecret && options.env.entraTenantId
+  const socialProviders = {
+    ...(options.env.entraClientId && options.env.entraClientSecret && options.env.entraTenantId
       ? {
           microsoft: {
             clientId: options.env.entraClientId,
             clientSecret: options.env.entraClientSecret,
             tenantId: options.env.entraTenantId,
+            mapProfileToUser: mapMicrosoftProfileToUser,
           },
         }
-      : undefined;
+      : {}),
+    ...(options.env.googleClientId && options.env.googleClientSecret
+      ? {
+          google: {
+            clientId: options.env.googleClientId,
+            clientSecret: options.env.googleClientSecret,
+          },
+        }
+      : {}),
+  };
 
   const auth = betterAuth({
     baseURL: options.env.betterAuthBaseUrl,
@@ -197,11 +208,11 @@ export function createBetterAuthGateway(options: CreateAuthGatewayOptions): Auth
         });
       },
     },
-    socialProviders,
+    ...(Object.keys(socialProviders).length > 0 ? { socialProviders } : {}),
     account: {
       accountLinking: {
         enabled: true,
-        trustedProviders: ["microsoft", "email-password"],
+        trustedProviders: ["microsoft", "google", "email-password"],
         allowDifferentEmails: false,
       },
       encryptOAuthTokens: true,

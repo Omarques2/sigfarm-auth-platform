@@ -30,6 +30,8 @@ const envSchema = z.object({
   ENTRA_CLIENT_ID: z.string().min(1).optional(),
   ENTRA_CLIENT_SECRET: z.string().min(1).optional(),
   ENTRA_TENANT_ID: z.string().min(1).optional(),
+  GOOGLE_CLIENT_ID: z.string().min(1).optional(),
+  GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
   AUTH_ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   AUTH_REFRESH_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(60 * 60 * 24 * 30),
   AUTH_JWT_ISSUER: z.string().url().optional(),
@@ -63,6 +65,8 @@ export type AppEnv = {
   entraClientId?: string;
   entraClientSecret?: string;
   entraTenantId?: string;
+  googleClientId?: string;
+  googleClientSecret?: string;
   accessTokenTtlSeconds: number;
   refreshTokenTtlSeconds: number;
   jwtIssuer: string;
@@ -113,6 +117,8 @@ export function loadEnv(rawEnv: NodeJS.ProcessEnv = process.env): AppEnv {
     ...(parsed.ENTRA_CLIENT_ID ? { entraClientId: parsed.ENTRA_CLIENT_ID } : {}),
     ...(parsed.ENTRA_CLIENT_SECRET ? { entraClientSecret: parsed.ENTRA_CLIENT_SECRET } : {}),
     ...(parsed.ENTRA_TENANT_ID ? { entraTenantId: parsed.ENTRA_TENANT_ID } : {}),
+    ...(parsed.GOOGLE_CLIENT_ID ? { googleClientId: parsed.GOOGLE_CLIENT_ID } : {}),
+    ...(parsed.GOOGLE_CLIENT_SECRET ? { googleClientSecret: parsed.GOOGLE_CLIENT_SECRET } : {}),
     accessTokenTtlSeconds: parsed.AUTH_ACCESS_TOKEN_TTL_SECONDS,
     refreshTokenTtlSeconds: parsed.AUTH_REFRESH_TOKEN_TTL_SECONDS,
     jwtIssuer: parsed.AUTH_JWT_ISSUER ?? baseUrl,

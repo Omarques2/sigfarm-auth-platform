@@ -29,6 +29,7 @@ const isEmailSubmitting = ref(false);
 const isPasswordSubmitting = ref(false);
 const isSignupSubmitting = ref(false);
 const isMicrosoftSubmitting = ref(false);
+const isGoogleSubmitting = ref(false);
 
 const verification = reactive({ email: "", notice: "", error: "", resendSeconds: 0, isSending: false });
 const resetFlow = reactive({
@@ -129,7 +130,7 @@ async function maybeHandleCallback(): Promise<void> {
     const error = firstQueryValue(route.query.error);
     const errorDescription = firstQueryValue(route.query.error_description);
     if (error || errorDescription) {
-      flashError.value = "Nao foi possivel concluir o login com Microsoft. Tente novamente.";
+      flashError.value = "Nao foi possivel concluir o login social. Tente novamente.";
       await router.replace({ name: "login", query: { status: "callback-error", returnTo: safeReturnTo.value } });
       return;
     }
@@ -255,6 +256,21 @@ async function onSignInWithMicrosoft(): Promise<void> {
   } catch (error) {
     flashError.value = resolveAuthError(error).message;
     isMicrosoftSubmitting.value = false;
+  }
+}
+
+async function onSignInWithGoogle(): Promise<void> {
+  clearFlash();
+  isGoogleSubmitting.value = true;
+  try {
+    const redirectUrl = await authApiClient.startGoogleSignIn({
+      callbackURL: callbackUrl.value,
+      errorCallbackURL: callbackUrl.value,
+    });
+    window.location.assign(redirectUrl);
+  } catch (error) {
+    flashError.value = resolveAuthError(error).message;
+    isGoogleSubmitting.value = false;
   }
 }
 
@@ -499,7 +515,7 @@ function applyStatusFromQuery(): void {
   if (status === "email-verified") flashSuccess.value = "Email verificado com sucesso. Agora voce pode entrar.";
   if (status === "password-updated") flashSuccess.value = "Senha atualizada com sucesso. Faca login com a nova senha.";
   if (status === "signed-out") flashSuccess.value = "Sessao encerrada com sucesso.";
-  if (status === "callback-error") flashError.value = "Nao foi possivel concluir o login com Microsoft. Tente novamente.";
+  if (status === "callback-error") flashError.value = "Nao foi possivel concluir o login social. Tente novamente.";
   if (status === "session-missing") flashError.value = "Sessao de autenticacao nao encontrada. Tente novamente.";
 }
 
@@ -801,7 +817,7 @@ function resolveAuthError(error: unknown): { message: string; code: string | nul
 
       <div v-if="shouldShowSocial" class="auth-social-area">
         <div class="section-divider" />
-        <button class="btn-microsoft" :class="{ 'is-loading': isMicrosoftSubmitting }" type="button" :disabled="isMicrosoftSubmitting" @click="onSignInWithMicrosoft">
+        <button class="btn-microsoft" :class="{ 'is-loading': isMicrosoftSubmitting }" type="button" :disabled="isMicrosoftSubmitting || isGoogleSubmitting" @click="onSignInWithMicrosoft">
           <span class="btn-spinner" aria-hidden="true" />
           <span class="microsoft-icon" aria-hidden="true">
             <span class="microsoft-tile red" />
@@ -810,6 +826,18 @@ function resolveAuthError(error: unknown): { message: string; code: string | nul
             <span class="microsoft-tile yellow" />
           </span>
           <span class="btn-label">Entrar com Microsoft</span>
+        </button>
+        <button class="btn-google" :class="{ 'is-loading': isGoogleSubmitting }" type="button" :disabled="isGoogleSubmitting || isMicrosoftSubmitting" @click="onSignInWithGoogle">
+          <span class="btn-spinner" aria-hidden="true" />
+          <span class="google-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="#EA4335" d="M12 10.2v3.9h5.5a4.7 4.7 0 0 1-2 3.1l3.1 2.4c1.8-1.7 2.9-4.2 2.9-7.2 0-.7-.1-1.5-.2-2.2H12Z" />
+              <path fill="#34A853" d="M12 22c2.6 0 4.9-.9 6.5-2.4l-3.1-2.4c-.9.6-2 .9-3.4.9-2.6 0-4.8-1.7-5.5-4.1l-3.2 2.5A10 10 0 0 0 12 22Z" />
+              <path fill="#4A90E2" d="M6.5 14c-.2-.6-.3-1.3-.3-2s.1-1.4.3-2L3.3 7.5A10 10 0 0 0 2 12c0 1.6.4 3.1 1.2 4.5L6.5 14Z" />
+              <path fill="#FBBC05" d="M12 5.9c1.4 0 2.7.5 3.7 1.5l2.8-2.8A10 10 0 0 0 12 2C8 2 4.5 4.3 3.2 7.5L6.5 10c.7-2.4 2.9-4.1 5.5-4.1Z" />
+            </svg>
+          </span>
+          <span class="btn-label">Entrar com Google</span>
         </button>
       </div>
     </section>
