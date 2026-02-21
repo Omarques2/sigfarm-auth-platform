@@ -164,6 +164,77 @@ describe("email provider", () => {
     expect(plainText).not.toContain("/api/auth/verify-email");
   });
 
+  it("encodes reset token only once in reset-password link", async () => {
+    const beginSend = vi.fn().mockResolvedValue({
+      pollUntilDone: async () => ({ status: "Succeeded" }),
+    });
+
+    const provider: EmailProvider = new AzureAcsEmailProvider({
+      connectionString: "endpoint=https://example/;accesskey=key",
+      senderAddress: "DoNotReply@mail.sigfarmintelligence.com",
+      verifyPageUrl: "https://auth.sigfarmintelligence.com/verify-email",
+      resetPageUrl: "https://auth.sigfarmintelligence.com/reset-password",
+      emailClient: {
+        beginSend,
+      } as {
+        beginSend: (...args: unknown[]) => Promise<{ pollUntilDone: () => Promise<unknown> }>;
+      },
+      maxAttempts: 1,
+    });
+
+    const rawToken = "ab+c/==";
+    await provider.sendResetPasswordEmail({
+      to: "user@sigfarm.com",
+      token: rawToken,
+      correlationId: "cid-reset-token",
+    });
+
+    const sentMessage = beginSend.mock.calls[0]?.[0] as { content?: { plainText?: string } };
+    const plainText = sentMessage?.content?.plainText ?? "";
+    const linkMatch = plainText.match(/https:\/\/\S+\/reset-password\?[^\s]+/);
+    expect(linkMatch).toBeTruthy();
+
+    const parsed = new URL(linkMatch![0]);
+    expect(parsed.searchParams.get("token")).toBe(rawToken);
+    expect(parsed.search).not.toContain("%25");
+  });
+
+  it("sends code-only password reset email for six-digit reset token", async () => {
+    const beginSend = vi.fn().mockResolvedValue({
+      pollUntilDone: async () => ({ status: "Succeeded" }),
+    });
+
+    const provider: EmailProvider = new AzureAcsEmailProvider({
+      connectionString: "endpoint=https://example/;accesskey=key",
+      senderAddress: "DoNotReply@mail.sigfarmintelligence.com",
+      verifyPageUrl: "https://auth.sigfarmintelligence.com/verify-email",
+      resetPageUrl: "https://auth.sigfarmintelligence.com/reset-password",
+      emailClient: {
+        beginSend,
+      } as {
+        beginSend: (...args: unknown[]) => Promise<{ pollUntilDone: () => Promise<unknown> }>;
+      },
+      maxAttempts: 1,
+    });
+
+    await provider.sendResetPasswordEmail({
+      to: "user@sigfarm.com",
+      token: "123456",
+      correlationId: "cid-reset-code",
+    });
+
+    const sentMessage = beginSend.mock.calls[0]?.[0] as {
+      content?: { plainText?: string; html?: string };
+    };
+    const plainText = sentMessage?.content?.plainText ?? "";
+    const html = sentMessage?.content?.html ?? "";
+
+    expect(plainText).toContain("Codigo: 123456");
+    expect(plainText).not.toContain("Link:");
+    expect(html).toContain("123456");
+    expect(html).not.toContain("/reset-password?token=");
+  });
+
   it("times out when azure beginSend does not resolve", async () => {
     const beginSend = vi.fn().mockImplementation(
       () =>
@@ -211,6 +282,9 @@ describe("email provider", () => {
         throw new Error("primary-down");
       },
       async sendEmailChangeCode() {
+        throw new Error("primary-down");
+      },
+      async sendPasswordChangedAlert() {
         throw new Error("primary-down");
       },
     };
@@ -264,5 +338,37 @@ describe("email provider", () => {
     const plainText = sentMessage?.content?.plainText ?? "";
     expect(plainText).toContain("Codigo: 123456");
     expect(plainText).not.toContain("/reset-password");
+  });
+
+  it("builds password-changed alert email without reset token", async () => {
+    const beginSend = vi.fn().mockResolvedValue({
+      pollUntilDone: async () => ({ status: "Succeeded" }),
+    });
+
+    const provider: EmailProvider = new AzureAcsEmailProvider({
+      connectionString: "endpoint=https://example/;accesskey=key",
+      senderAddress: "DoNotReply@mail.sigfarmintelligence.com",
+      verifyPageUrl: "https://auth.sigfarmintelligence.com/verify-email",
+      resetPageUrl: "https://auth.sigfarmintelligence.com/reset-password",
+      emailClient: {
+        beginSend,
+      } as {
+        beginSend: (...args: unknown[]) => Promise<{ pollUntilDone: () => Promise<unknown> }>;
+      },
+      maxAttempts: 1,
+    });
+
+    await provider.sendPasswordChangedAlert({
+      to: "user@sigfarm.com",
+      correlationId: "cid-password-changed",
+    });
+
+    const sentMessage = beginSend.mock.calls[0]?.[0] as {
+      content?: { subject?: string; plainText?: string };
+    };
+    expect(sentMessage?.content?.subject).toContain("Senha alterada");
+    expect(sentMessage?.content?.plainText).toContain("senha da sua conta foi alterada");
+    expect(sentMessage?.content?.plainText).not.toContain("Token:");
+    expect(sentMessage?.content?.plainText).not.toContain("/reset-password");
   });
 });

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
-import { RouterLink, useRoute, useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
+import AuthBackButton from "../components/AuthBackButton.vue";
 import { authApiClient, AuthApiError } from "../lib/auth-api";
+import { readTokenFromLocation } from "../lib/token-query";
 
 const route = useRoute();
 const router = useRouter();
@@ -14,7 +16,7 @@ let redirectTimer: ReturnType<typeof setInterval> | null = null;
 let redirectTimeout: ReturnType<typeof setTimeout> | null = null;
 
 onMounted(async () => {
-  const token = firstQueryValue(route.query.token) ?? firstQueryValue(route.query.Token);
+  const token = readTokenFromLocation(route.query as Record<string, unknown>);
   if (!token) {
     phase.value = "error";
     detail.value = "Link invalido. Solicite um novo email de verificacao.";
@@ -56,12 +58,6 @@ function scheduleLoginRedirect(): void {
   }, 1000);
 }
 
-function firstQueryValue(value: unknown): string | undefined {
-  if (typeof value === "string") return value;
-  if (Array.isArray(value) && typeof value[0] === "string") return value[0];
-  return undefined;
-}
-
 function resolveErrorMessage(error: unknown): string {
   if (error instanceof AuthApiError) {
     if (error.status === 400 || error.status === 401) {
@@ -90,6 +86,7 @@ function resolveErrorMessage(error: unknown): string {
     </header>
 
     <section class="step-block verify-step">
+      <AuthBackButton to="/login" />
       <h1>Verificar email</h1>
       <p class="step-caption">Concluindo a validacao da sua conta.</p>
 
@@ -109,10 +106,6 @@ function resolveErrorMessage(error: unknown): string {
         <p :class="{ 'loading-pulse': phase === 'processing' }">{{ detail }}</p>
 
         <p v-if="phase === 'success'" class="verify-next">Voltando para login em {{ redirectSeconds }}s...</p>
-      </div>
-
-      <div class="verify-actions">
-        <RouterLink v-if="phase !== 'processing'" class="link-like" to="/login">Ir para login</RouterLink>
       </div>
     </section>
   </article>

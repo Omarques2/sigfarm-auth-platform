@@ -10,9 +10,12 @@ import type { AuditEventInput, AuditService } from "./audit.service.js";
 import type { AuthUser, IdentityService } from "./identity.service.js";
 import { mapMicrosoftProfileToUser } from "./microsoft-profile.js";
 import {
+  DEFAULT_PWNED_PASSWORD_TIMEOUT_MS,
+  PASSWORD_COMPROMISED_MESSAGE,
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
   PASSWORD_POLICY_MESSAGE,
+  isPasswordCompromised,
   isPasswordPolicyCompliant,
 } from "./password-policy.js";
 
@@ -140,6 +143,13 @@ export function createBetterAuthGateway(options: CreateAuthGatewayOptions): Auth
       },
       onPasswordReset: async ({ user }, request) => {
         await options.identityService.consumeLatestResetToken(user.id);
+        const correlationId = resolveCorrelationIdFromRequest(request);
+        runInBackground(async () => {
+          await options.emailProvider.sendPasswordChangedAlert({
+            to: user.email,
+            correlationId,
+          });
+        }, "password-changed-alert");
         await options.auditService.record({
           eventType: "auth.password_reset.completed",
           actorUserId: user.id,
@@ -331,11 +341,12 @@ export function createBetterAuthGateway(options: CreateAuthGatewayOptions): Auth
             reply.code(204).send();
             return;
           }
-          if (hasPasswordPolicyViolation(request)) {
+          const violation = await readPasswordPolicyViolation(request, options.env);
+          if (violation) {
             reply.code(422).send({
               error: {
-                code: "PASSWORD_POLICY_VIOLATION",
-                message: PASSWORD_POLICY_MESSAGE,
+                code: violation.code,
+                message: violation.message,
               },
             });
             return;
@@ -372,20 +383,48 @@ export function createBetterAuthGateway(options: CreateAuthGatewayOptions): Auth
   };
 }
 
-function hasPasswordPolicyViolation(request: FastifyRequest): boolean {
-  if (request.method !== "POST") return false;
+type PasswordPolicyViolation = {
+  code: "PASSWORD_POLICY_VIOLATION" | "PASSWORD_COMPROMISED";
+  message: string;
+};
+
+async function readPasswordPolicyViolation(
+  request: FastifyRequest,
+  env: AppEnv,
+): Promise<PasswordPolicyViolation | null> {
+  if (request.method !== "POST") return null;
   const endpoint = readRequestPathname(request.url);
   if (endpoint !== "/api/auth/sign-up/email" && endpoint !== "/api/auth/reset-password") {
-    return false;
+    return null;
   }
 
   const payload = readBodyObject(request.body);
-  if (!payload) return false;
+  if (!payload) return null;
 
   const fieldName = endpoint === "/api/auth/sign-up/email" ? "password" : "newPassword";
   const value = payload[fieldName];
-  if (typeof value !== "string") return false;
-  return !isPasswordPolicyCompliant(value);
+  if (typeof value !== "string") return null;
+
+  if (!isPasswordPolicyCompliant(value)) {
+    return {
+      code: "PASSWORD_POLICY_VIOLATION",
+      message: PASSWORD_POLICY_MESSAGE,
+    };
+  }
+
+  const compromised = await isPasswordCompromised(value, {
+    enabled: env.authPwnedPasswordCheckEnabled ?? env.nodeEnv !== "test",
+    timeoutMs: env.authPwnedPasswordCheckTimeoutMs ?? DEFAULT_PWNED_PASSWORD_TIMEOUT_MS,
+  });
+
+  if (!compromised) {
+    return null;
+  }
+
+  return {
+    code: "PASSWORD_COMPROMISED",
+    message: PASSWORD_COMPROMISED_MESSAGE,
+  };
 }
 
 function readRequestPathname(rawUrl: string): string {

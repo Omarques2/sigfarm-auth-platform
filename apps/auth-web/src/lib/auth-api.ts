@@ -62,7 +62,7 @@ type DiscoverEmailResponse = {
 };
 
 type RequestPasswordResetCodeResponse = {
-  status: "sent" | "cooldown" | "missing";
+  status: "sent" | "cooldown";
   retryAfterSeconds: number;
 };
 
@@ -126,6 +126,9 @@ type ConfirmEmailChangeCodeResponse = {
 type AuthApiClientConfig = {
   authApiBaseUrl: string;
 };
+
+const NETWORK_RETRY_ATTEMPTS = 1;
+const NETWORK_RETRY_DELAY_MS = 220;
 
 export class AuthApiClient {
   private readonly authBasePath: string;
@@ -371,7 +374,7 @@ export class AuthApiClient {
 
   private async fetchJson<T>(url: URL, options: RequestOptions): Promise<T> {
     const correlationId = createCorrelationId();
-    const response = await fetch(url, {
+    const requestInit: RequestInit = {
       method: options.method,
       credentials: "include",
       headers: {
@@ -379,7 +382,8 @@ export class AuthApiClient {
         ...(options.body ? { "content-type": "application/json" } : {}),
       },
       ...(options.body ? { body: JSON.stringify(options.body) } : {}),
-    });
+    };
+    const response = await this.fetchWithRetry(url, requestInit);
 
     const responseBody = await parseResponseBody(response);
     if (!response.ok) {
@@ -391,6 +395,23 @@ export class AuthApiClient {
       });
     }
     return responseBody as T;
+  }
+
+  private async fetchWithRetry(url: URL, requestInit: RequestInit): Promise<Response> {
+    let attempt = 0;
+
+    while (true) {
+      try {
+        return await fetch(url, requestInit);
+      } catch (error) {
+        if (!isRetryableNetworkError(error) || attempt >= NETWORK_RETRY_ATTEMPTS) {
+          throw error;
+        }
+
+        attempt += 1;
+        await sleep(NETWORK_RETRY_DELAY_MS * attempt);
+      }
+    }
   }
 }
 
@@ -431,4 +452,16 @@ function readErrorMessage(value: unknown): string | null {
 function stripLeadingSlash(value: string): string {
   if (value.startsWith("/")) return value.slice(1);
   return value;
+}
+
+function isRetryableNetworkError(error: unknown): boolean {
+  if (!(error instanceof TypeError)) return false;
+  const message = error.message.toLowerCase();
+  return message.includes("failed to fetch") || message.includes("network");
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }

@@ -1,8 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import AuthBackButton from "../components/AuthBackButton.vue";
 import { authWebEnv } from "../config/env";
 import { authApiClient, AuthApiError } from "../lib/auth-api";
+import {
+  getResetProgressLabel,
+  getResetRequestCountdownSeconds,
+  getResetRequestNotice,
+  getResetResendHint,
+  getResendLabel,
+} from "../lib/reset-flow";
 import { resolveSafeReturnTo } from "../lib/return-to";
 
 type LoginStep = "email" | "password" | "signup" | "verify-pending" | "reset-code" | "reset-password";
@@ -21,9 +29,15 @@ const emailValue = ref("");
 const passwordValue = ref("");
 const signupName = ref("");
 const signupPassword = ref("");
+const signupConfirmPassword = ref("");
+const emailTouched = ref(false);
 const showPasswordField = ref(false);
 const showSignupPasswordField = ref(false);
+const showSignupConfirmPasswordField = ref(false);
 const showResetPasswordField = ref(false);
+const showResetConfirmPasswordField = ref(false);
+const isSignupPasswordFocused = ref(false);
+const isResetPasswordFocused = ref(false);
 
 const isEmailSubmitting = ref(false);
 const isPasswordSubmitting = ref(false);
@@ -42,11 +56,18 @@ const resetFlow = reactive({
   isCompleting: false,
   codeDigits: ["", "", "", "", "", ""] as string[],
   newPassword: "",
+  confirmPassword: "",
 });
 
 let verificationTimer: ReturnType<typeof setInterval> | null = null;
 let resetTimer: ReturnType<typeof setInterval> | null = null;
+let resetAutoVerifyTimer: ReturnType<typeof setTimeout> | null = null;
 const resetRefs = ref<Array<HTMLInputElement | null>>([]);
+const emailInputRef = ref<HTMLInputElement | null>(null);
+const passwordInputRef = ref<HTMLInputElement | null>(null);
+const signupPasswordInputRef = ref<HTMLInputElement | null>(null);
+const signupEmailInputRef = ref<HTMLInputElement | null>(null);
+const resetPasswordInputRef = ref<HTMLInputElement | null>(null);
 
 const normalizedEmail = computed(() => normalizeEmail(emailValue.value));
 const resetCode = computed(() => resetFlow.codeDigits.join(""));
@@ -67,12 +88,49 @@ const callbackUrl = computed(() => {
 });
 const signupRules = computed(() => passwordRules(signupPassword.value));
 const signupStrong = computed(() => signupRules.value.every((rule) => rule.met));
-const showSignupChecklist = computed(() => signupPassword.value.trim().length > 0);
+const showSignupChecklist = computed(() => isSignupPasswordFocused.value);
 const resetRules = computed(() => passwordRules(resetFlow.newPassword));
 const resetStrong = computed(() => resetRules.value.every((rule) => rule.met));
-const showResetChecklist = computed(() => resetFlow.newPassword.trim().length > 0);
+const showResetChecklist = computed(() => isResetPasswordFocused.value);
+const signupPasswordsMatch = computed(
+  () =>
+    signupPassword.value.length > 0 &&
+    signupConfirmPassword.value.length > 0 &&
+    signupPassword.value === signupConfirmPassword.value,
+);
+const resetPasswordsMatch = computed(
+  () =>
+    resetFlow.newPassword.length > 0 &&
+    resetFlow.confirmPassword.length > 0 &&
+    resetFlow.newPassword === resetFlow.confirmPassword,
+);
+const isEmailValid = computed(() => isValidEmail(normalizedEmail.value));
+const emailValidationMessage = computed(() => {
+  if (!emailTouched.value) return "";
+  if (!normalizedEmail.value) return "Digite seu e-mail.";
+  if (!isValidEmail(normalizedEmail.value)) return "Formato inválido. Exemplo: nome@empresa.com";
+  return "E-mail válido.";
+});
+const emailValidationTone = computed<"neutral" | "error" | "success">(() => {
+  if (!emailTouched.value || !emailValidationMessage.value) return "neutral";
+  return isValidEmail(normalizedEmail.value) ? "success" : "error";
+});
+const resetProgressLabel = computed(() =>
+  getResetProgressLabel(step.value === "reset-password" ? "reset-password" : "reset-code"),
+);
+const verificationResendLabel = computed(() => getResendLabel("email", verification.resendSeconds));
+const resetResendLabel = computed(() => getResendLabel("codigo", resetFlow.resendSeconds));
+const resetResendHint = computed(() => getResetResendHint());
+const maskedResetEmail = computed(() => maskEmail(resetFlow.email));
 const shouldShowSocial = computed(
   () => (step.value === "email" || step.value === "password") && !isCallbackProcessing.value,
+);
+const shouldShowStepBack = computed(() =>
+  step.value === "password" ||
+  step.value === "signup" ||
+  step.value === "verify-pending" ||
+  step.value === "reset-code" ||
+  step.value === "reset-password",
 );
 const globalFeedback = computed(() =>
   flashError.value
@@ -89,17 +147,20 @@ const verificationFeedback = computed(() =>
       : null,
 );
 const resetFeedback = computed(() =>
-  resetFlow.error
-    ? { type: "error" as const, message: resetFlow.error }
-    : resetFlow.notice
-      ? { type: "success" as const, message: resetFlow.notice }
-      : null,
+  resetFlow.error ? { type: "error" as const, message: resetFlow.error } : null,
+);
+const resetCompromisedPasswordMessage = computed(() =>
+  resetFlow.error === "Essa senha já apareceu em vazamentos conhecidos. Escolha outra."
+    ? resetFlow.error
+    : "",
 );
 
 onMounted(async () => {
   applyStatusFromQuery();
   await maybeHandleCallback();
   if (!isCallbackRoute()) await tryResumeSession();
+  await nextTick();
+  emailInputRef.value?.focus();
 });
 watch(
   () => route.fullPath,
@@ -108,9 +169,29 @@ watch(
     await maybeHandleCallback();
   },
 );
+watch(step, async (nextStep) => {
+  await nextTick();
+  if (nextStep === "email") emailInputRef.value?.focus();
+  if (nextStep === "password") passwordInputRef.value?.focus();
+  if (nextStep === "signup") {
+    if (!normalizedEmail.value) signupEmailInputRef.value?.focus();
+    else signupPasswordInputRef.value?.focus();
+  }
+  if (nextStep === "reset-code") focusResetCodeInput(0);
+  if (nextStep === "reset-password") resetPasswordInputRef.value?.focus();
+});
+watch(resetCode, (value) => {
+  if (step.value !== "reset-code") return;
+  if (!/^\d{6}$/.test(value) || resetFlow.isVerifying) return;
+  if (resetAutoVerifyTimer) clearTimeout(resetAutoVerifyTimer);
+  resetAutoVerifyTimer = setTimeout(() => {
+    void onVerifyResetCode();
+  }, 180);
+});
 onBeforeUnmount(() => {
   stopVerificationCountdown();
   stopResetCountdown();
+  if (resetAutoVerifyTimer) clearTimeout(resetAutoVerifyTimer);
 });
 
 function isCallbackRoute(): boolean {
@@ -130,13 +211,13 @@ async function maybeHandleCallback(): Promise<void> {
     const error = firstQueryValue(route.query.error);
     const errorDescription = firstQueryValue(route.query.error_description);
     if (error || errorDescription) {
-      flashError.value = "Nao foi possivel concluir o login social. Tente novamente.";
+      flashError.value = "Não foi possível concluir o login social. Tente novamente.";
       await router.replace({ name: "login", query: { status: "callback-error", returnTo: safeReturnTo.value } });
       return;
     }
     const session = await authApiClient.getSession();
     if (!session) {
-      flashError.value = "Sessao de autenticacao nao encontrada. Tente novamente.";
+      flashError.value = "Sessão de autenticação não encontrada. Tente novamente.";
       await router.replace({ name: "login", query: { status: "session-missing", returnTo: safeReturnTo.value } });
       return;
     }
@@ -165,9 +246,10 @@ async function tryResumeSession(): Promise<void> {
 
 async function onContinueWithEmail(): Promise<void> {
   clearFlash();
+  emailTouched.value = true;
   const email = normalizedEmail.value;
   if (!isValidEmail(email)) {
-    flashError.value = "Digite um email valido.";
+    flashError.value = "Digite um e-mail válido.";
     return;
   }
   isEmailSubmitting.value = true;
@@ -189,9 +271,10 @@ async function onContinueWithEmail(): Promise<void> {
 
 async function onSubmitPassword(): Promise<void> {
   clearFlash();
+  emailTouched.value = true;
   const email = normalizedEmail.value;
   if (!isValidEmail(email)) {
-    flashError.value = "Digite um email valido.";
+    flashError.value = "Digite um e-mail válido.";
     step.value = "email";
     return;
   }
@@ -214,14 +297,19 @@ async function onSubmitPassword(): Promise<void> {
 
 async function onSubmitSignup(): Promise<void> {
   clearFlash();
+  emailTouched.value = true;
   const email = normalizedEmail.value;
   if (!isValidEmail(email)) {
-    flashError.value = "Digite um email valido.";
+    flashError.value = "Digite um e-mail válido.";
     step.value = "email";
     return;
   }
   if (!signupStrong.value) {
-    flashError.value = "Use uma senha forte para criar sua conta.";
+    flashError.value = "Use uma senha com no mínimo 12 caracteres.";
+    return;
+  }
+  if (!signupPasswordsMatch.value) {
+    flashError.value = "As senhas informadas não coincidem.";
     return;
   }
   isSignupSubmitting.value = true;
@@ -234,6 +322,7 @@ async function onSubmitSignup(): Promise<void> {
     });
     signupName.value = "";
     signupPassword.value = "";
+    signupConfirmPassword.value = "";
     await openVerificationStep({ email, autoSend: false });
   } catch (error) {
     const resolved = resolveAuthError(error);
@@ -276,8 +365,40 @@ async function onSignInWithGoogle(): Promise<void> {
 
 function onBackToEmailStep(): void {
   clearFlash();
+  stopVerificationCountdown();
+  stopResetCountdown();
+  if (resetAutoVerifyTimer) {
+    clearTimeout(resetAutoVerifyTimer);
+    resetAutoVerifyTimer = null;
+  }
   step.value = "email";
   passwordValue.value = "";
+  signupConfirmPassword.value = "";
+  resetFlow.confirmPassword = "";
+}
+
+function onOpenSignupStep(): void {
+  clearFlash();
+  signupConfirmPassword.value = "";
+  step.value = "signup";
+}
+
+function onBackFromCurrentStep(): void {
+  if (step.value === "reset-password") {
+    onBackToLoginFromResetPassword();
+    return;
+  }
+  onBackToEmailStep();
+}
+
+function onBackToLoginFromResetPassword(): void {
+  clearFlash();
+  stopResetCountdown();
+  resetFlow.error = "";
+  resetFlow.newPassword = "";
+  resetFlow.confirmPassword = "";
+  resetFlow.codeDigits = ["", "", "", "", "", ""];
+  step.value = "email";
 }
 
 async function openVerificationStep(input: {
@@ -294,14 +415,14 @@ async function openVerificationStep(input: {
   const initialCooldown = Math.max(0, input.initialCooldownSeconds ?? 0);
   if (input.autoSend) {
     if (initialCooldown > 0) {
-      verification.notice = "Email de verificacao enviado recentemente.";
+      verification.notice = "E-mail de verificação enviado recentemente.";
       startVerificationCountdown(initialCooldown);
       return;
     }
     await sendVerificationEmail({ force: true });
     return;
   }
-  verification.notice = "Enviamos o email de verificacao automaticamente.";
+  verification.notice = "Enviamos o e-mail de verificação automaticamente.";
   startVerificationCountdown(60);
 }
 
@@ -313,7 +434,7 @@ async function sendVerificationEmail(input?: { force?: boolean }): Promise<void>
   verification.error = "";
   try {
     await authApiClient.sendVerificationEmail({ email: verification.email, callbackURL: callbackUrl.value });
-    verification.notice = "Novo email de verificacao enviado.";
+    verification.notice = "Novo e-mail de verificação enviado.";
     startVerificationCountdown(60);
   } catch (error) {
     verification.error = resolveAuthError(error).message;
@@ -324,17 +445,21 @@ async function sendVerificationEmail(input?: { force?: boolean }): Promise<void>
 
 async function onOpenResetPasswordStep(): Promise<void> {
   clearFlash();
+  emailTouched.value = true;
   const email = normalizedEmail.value;
   if (!isValidEmail(email)) {
-    flashError.value = "Digite seu email para recuperar a senha.";
+    flashError.value = "Digite seu e-mail para recuperar a senha.";
     return;
   }
   step.value = "reset-code";
   resetFlow.email = email;
-  resetFlow.notice = "";
+  // Show a generic message immediately to avoid timing hints in UI.
+  resetFlow.notice = getResetRequestNotice("sent");
   resetFlow.error = "";
   resetFlow.newPassword = "";
+  resetFlow.confirmPassword = "";
   resetFlow.codeDigits = ["", "", "", "", "", ""];
+  startResetCountdown(getResetRequestCountdownSeconds(0));
   await nextTick();
   focusResetCodeInput(0);
   await requestResetCode({ force: true });
@@ -346,21 +471,14 @@ async function requestResetCode(input?: { force?: boolean }): Promise<void> {
   if (!resetFlow.email) return;
   resetFlow.isRequesting = true;
   resetFlow.error = "";
+  // Keep notice stable while request is in-flight.
+  resetFlow.notice = getResetRequestNotice("sent");
+  if (resetFlow.resendSeconds < 1) {
+    startResetCountdown(getResetRequestCountdownSeconds(0));
+  }
   try {
     const result = await authApiClient.requestPasswordResetCode(resetFlow.email);
-    if (result.status === "missing") {
-      stopResetCountdown();
-      resetFlow.notice = "";
-      step.value = "email";
-      flashError.value = "Este email nao possui conta cadastrada.";
-      return;
-    }
-    const nextCooldown = Math.max(1, result.retryAfterSeconds || 60);
-    startResetCountdown(nextCooldown);
-    resetFlow.notice =
-      result.status === "cooldown"
-        ? "Aguarde o contador para reenviar o codigo."
-        : "Codigo de verificacao enviado para seu email.";
+    resetFlow.notice = getResetRequestNotice(result.status);
   } catch (error) {
     resetFlow.error = resolveAuthError(error).message;
   } finally {
@@ -370,20 +488,24 @@ async function requestResetCode(input?: { force?: boolean }): Promise<void> {
 
 async function onVerifyResetCode(): Promise<void> {
   resetFlow.error = "";
+  if (resetAutoVerifyTimer) {
+    clearTimeout(resetAutoVerifyTimer);
+    resetAutoVerifyTimer = null;
+  }
   const code = resetCode.value;
   if (!/^\d{6}$/.test(code)) {
-    resetFlow.error = "Digite os 6 digitos do codigo.";
+    resetFlow.error = "Digite os 6 dígitos do código.";
     return;
   }
   resetFlow.isVerifying = true;
   try {
     const result = await authApiClient.verifyPasswordResetCode({ email: resetFlow.email, code });
     if (!result.valid) {
-      resetFlow.error = "Codigo invalido ou expirado.";
+      resetFlow.error = "Código inválido ou expirado.";
       return;
     }
     step.value = "reset-password";
-    resetFlow.notice = "Codigo validado. Defina sua nova senha.";
+    resetFlow.notice = "Código validado. Defina sua nova senha.";
   } catch (error) {
     resetFlow.error = resolveAuthError(error).message;
   } finally {
@@ -394,7 +516,11 @@ async function onVerifyResetCode(): Promise<void> {
 async function onCompleteResetWithCode(): Promise<void> {
   resetFlow.error = "";
   if (!resetStrong.value) {
-    resetFlow.error = "Use uma senha forte para continuar.";
+    resetFlow.error = "Use uma senha com no mínimo 12 caracteres.";
+    return;
+  }
+  if (!resetPasswordsMatch.value) {
+    resetFlow.error = "As senhas informadas não coincidem.";
     return;
   }
   resetFlow.isCompleting = true;
@@ -405,26 +531,22 @@ async function onCompleteResetWithCode(): Promise<void> {
       newPassword: resetFlow.newPassword,
     });
     if (!result.updated) {
-      resetFlow.error = "Codigo invalido ou expirado. Solicite um novo codigo.";
+      resetFlow.error = "Código inválido ou expirado. Solicite um novo código.";
       step.value = "reset-code";
       return;
     }
     resetFlow.newPassword = "";
+    resetFlow.confirmPassword = "";
     resetFlow.codeDigits = ["", "", "", "", "", ""];
     stopResetCountdown();
     step.value = "email";
     passwordValue.value = "";
-    flashSuccess.value = "Senha atualizada com sucesso. Faca login novamente.";
+    flashSuccess.value = "Senha atualizada com sucesso. Faça login novamente.";
   } catch (error) {
     resetFlow.error = resolveAuthError(error).message;
   } finally {
     resetFlow.isCompleting = false;
   }
-}
-
-function onBackToResetCode(): void {
-  resetFlow.error = "";
-  step.value = "reset-code";
 }
 
 function setResetCodeInputRef(el: Element | null, index: number): void {
@@ -497,11 +619,7 @@ function stopResetCountdown(): void {
 
 function passwordRules(password: string): Rule[] {
   return [
-    { key: "length", label: "Minimo de 12 caracteres", met: password.length >= 12 },
-    { key: "lowercase", label: "Pelo menos 1 letra minuscula", met: /[a-z]/.test(password) },
-    { key: "uppercase", label: "Pelo menos 1 letra maiuscula", met: /[A-Z]/.test(password) },
-    { key: "digit", label: "Pelo menos 1 numero", met: /\d/.test(password) },
-    { key: "special", label: "Pelo menos 1 caractere especial", met: /[^A-Za-z\d]/.test(password) },
+    { key: "length", label: "Mínimo de 12 caracteres", met: password.length >= 12 },
   ];
 }
 
@@ -510,20 +628,32 @@ function resolveSignupName(rawName: string, email: string): string {
   if (trimmed.length > 0) return trimmed;
   const local = email.split("@")[0] ?? "";
   const normalized = local.replace(/[._-]+/g, " ").replace(/\s+/g, " ").trim();
-  if (!normalized) return "Usuario Sigfarm";
+  if (!normalized) return "Usuário Sigfarm";
   return normalized
     .split(" ")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
     .join(" ");
 }
 
+function maskEmail(email: string): string {
+  const normalized = normalizeEmail(email);
+  const [local = "", domain = ""] = normalized.split("@");
+  if (!local || !domain) return email;
+  const localMasked = `${local.slice(0, Math.min(3, local.length))}***`;
+  const domainParts = domain.split(".");
+  const host = domainParts[0] ?? "";
+  const tld = domainParts.slice(1).join(".");
+  const hostMasked = `${host.slice(0, Math.min(3, host.length))}***`;
+  return `${localMasked}@${hostMasked}${tld ? `.${tld}` : ""}`;
+}
+
 function applyStatusFromQuery(): void {
   const status = firstQueryValue(route.query.status);
-  if (status === "email-verified") flashSuccess.value = "Email verificado com sucesso. Agora voce pode entrar.";
-  if (status === "password-updated") flashSuccess.value = "Senha atualizada com sucesso. Faca login com a nova senha.";
-  if (status === "signed-out") flashSuccess.value = "Sessao encerrada com sucesso.";
-  if (status === "callback-error") flashError.value = "Nao foi possivel concluir o login social. Tente novamente.";
-  if (status === "session-missing") flashError.value = "Sessao de autenticacao nao encontrada. Tente novamente.";
+  if (status === "email-verified") flashSuccess.value = "E-mail verificado com sucesso. Agora você pode entrar.";
+  if (status === "password-updated") flashSuccess.value = "Senha atualizada com sucesso. Faça login com a nova senha.";
+  if (status === "signed-out") flashSuccess.value = "Sessão encerrada com sucesso.";
+  if (status === "callback-error") flashError.value = "Não foi possível concluir o login social. Tente novamente.";
+  if (status === "session-missing") flashError.value = "Sessão de autenticação não encontrada. Tente novamente.";
 }
 
 function clearFlash(): void {
@@ -575,29 +705,43 @@ function readAuthErrorCode(details: unknown): string | null {
 function resolveAuthError(error: unknown): { message: string; code: string | null } {
   if (error instanceof AuthApiError) {
     const code = readAuthErrorCode(error.details);
-    if (code === "EMAIL_NOT_VERIFIED") return { code, message: "Email nao verificado." };
+    if (code === "EMAIL_NOT_VERIFIED") return { code, message: "E-mail não verificado." };
+    if (code === "PASSWORD_POLICY_VIOLATION") {
+      return { code, message: "Use uma senha com no mínimo 12 caracteres." };
+    }
+    if (code === "PASSWORD_COMPROMISED") {
+      return { code, message: "Essa senha já apareceu em vazamentos conhecidos. Escolha outra." };
+    }
+    if (error.status === 422 && code === "INVALID_CREDENTIALS" && error.message) {
+      return { code, message: error.message };
+    }
     if (code === "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL") {
-      return { code, message: "Este email ja possui cadastro. Tente entrar ou recuperar a senha." };
+      return { code, message: "Não foi possível concluir com esse e-mail. Tente entrar ou recuperar senha." };
     }
     if (error.status === 429) return { code, message: "Muitas tentativas. Aguarde alguns segundos e tente novamente." };
-    if (error.status === 401 || error.status === 422) return { code, message: error.message || "Dados invalidos." };
-    return { code, message: error.message || "Falha na autenticacao." };
+    if (error.status === 401) {
+      return { code, message: "E-mail ou senha inválidos." };
+    }
+    return { code, message: "Não foi possível concluir a solicitação. Tente novamente." };
   }
   if (error instanceof Error && error.message) return { code: null, message: error.message };
-  return { code: null, message: "Falha na autenticacao." };
+  return { code: null, message: "Falha na autenticação." };
 }
 </script>
 
 <template>
   <article class="login-view panel-screen">
-    <header class="brand-hero" aria-label="Sigfarm Intelligence">
+    <div class="login-layout">
+      <section class="login-main-surface">
+        <AuthBackButton v-if="shouldShowStepBack" @click="onBackFromCurrentStep" />
+        <header class="brand-hero" :class="{ compact: step !== 'email' }" aria-label="Sigfarm Intelligence">
       <div class="brand-logo-large-frame">
         <img src="/sigfarm-logo.png" alt="Sigfarm Intelligence" class="brand-logo-large" />
       </div>
       <p class="brand-company">Sigfarm Intelligence</p>
-    </header>
+        </header>
 
-    <section class="login-content-zone">
+        <section class="login-content-zone">
       <div class="feedback-slot" aria-live="polite" aria-atomic="true">
         <Transition name="fade-up" mode="out-in">
           <p
@@ -612,37 +756,64 @@ function resolveAuthError(error: unknown): { message: string; code: string | nul
         </Transition>
       </div>
 
-      <Transition name="step-slide" mode="out-in">
+      <div class="step-stage">
+      <Transition name="step-slide">
         <section v-if="step === 'email'" key="email" class="step-block">
-          <h1>Entrar</h1>
-          <p class="step-caption">Digite seu email para continuar.</p>
+          <h1 class="title-with-icon">
+            <span class="title-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none">
+                <path d="M12.5 4.5h5.3a1.7 1.7 0 0 1 1.7 1.7v11.6a1.7 1.7 0 0 1-1.7 1.7h-5.3" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+                <path d="M4.5 12h11" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+                <path d="m12.1 8.8 3.2 3.2-3.2 3.2" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </span>
+            <span>Entrar</span>
+          </h1>
+          <p class="step-caption">Informe seu e-mail para continuar.</p>
           <form class="form-grid" @submit.prevent="onContinueWithEmail">
-            <label>Email
-              <input
-                v-model.trim="emailValue"
-                type="email"
-                autocomplete="username email"
-                placeholder="nome@empresa.com"
-                required
-              />
-            </label>
-            <button class="btn-primary" :class="{ 'is-loading': isEmailSubmitting }" type="submit" :disabled="isEmailSubmitting">
+            <label for="login-email">E-mail</label>
+            <input
+              id="login-email"
+              ref="emailInputRef"
+              v-model.trim="emailValue"
+              type="email"
+              autocomplete="username email"
+              placeholder="nome@provedor.com"
+              :aria-describedby="'login-email-helper'"
+              required
+              @input="emailTouched = true"
+            />
+            <div id="login-email-helper" class="inline-helper-slot" aria-live="polite">
+              <span
+                v-if="emailValidationMessage"
+                class="inline-hint"
+                :class="{
+                  'hint-error': emailValidationTone === 'error',
+                  'hint-success': emailValidationTone === 'success',
+                }"
+              >
+                {{ emailValidationMessage }}
+              </span>
+              <span v-else class="feedback-empty" aria-hidden="true" />
+            </div>
+            <button class="btn-primary" :class="{ 'is-loading': isEmailSubmitting }" type="submit" :disabled="isEmailSubmitting || !isEmailValid">
               <span class="btn-spinner" aria-hidden="true" />
               <span class="btn-label">Continuar</span>
             </button>
           </form>
-          <div class="helper-row">
-            <button class="link-like" type="button" @click="onOpenResetPasswordStep">Esqueceu sua senha?</button>
+          <div class="helper-row single">
+            <button class="link-like" type="button" @click="onOpenSignupStep">Criar conta</button>
           </div>
         </section>
 
         <section v-else-if="step === 'password'" key="password" class="step-block">
-          <h1>Entrar com senha</h1>
+          <h1>Digite sua senha</h1>
           <p class="step-caption">{{ normalizedEmail }}</p>
+          <button class="link-like step-inline-link" type="button" @click="onBackToEmailStep">Não é você? Trocar e-mail</button>
           <form class="form-grid" @submit.prevent="onSubmitPassword">
-            <label>Senha
-              <div class="input-with-toggle">
-                <input v-model="passwordValue" :type="showPasswordField ? 'text' : 'password'" autocomplete="current-password" placeholder="Digite sua senha" class="has-toggle" required />
+            <label for="login-password">Senha</label>
+            <div class="input-with-toggle">
+                <input id="login-password" ref="passwordInputRef" v-model="passwordValue" :type="showPasswordField ? 'text' : 'password'" autocomplete="current-password" placeholder="Digite sua senha" class="has-toggle" required />
                 <button class="password-toggle" type="button" :aria-label="showPasswordField ? 'Ocultar senha' : 'Mostrar senha'" @click="showPasswordField = !showPasswordField">
                   <svg v-if="showPasswordField" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                     <path d="M4 4 20 20" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
@@ -656,28 +827,54 @@ function resolveAuthError(error: unknown): { message: string; code: string | nul
                   </svg>
                 </button>
               </div>
-            </label>
             <button class="btn-primary" :class="{ 'is-loading': isPasswordSubmitting }" type="submit" :disabled="isPasswordSubmitting">
               <span class="btn-spinner" aria-hidden="true" />
-              <span class="btn-label">Entrar</span>
+              <span class="btn-label btn-label-with-icon">
+                <svg class="btn-action-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M12.5 4.5h5.3a1.7 1.7 0 0 1 1.7 1.7v11.6a1.7 1.7 0 0 1-1.7 1.7h-5.3" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+                  <path d="M4.5 12h11" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+                  <path d="m12.1 8.8 3.2 3.2-3.2 3.2" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <span>Entrar</span>
+              </span>
             </button>
           </form>
           <div class="helper-row">
             <button class="link-like" type="button" @click="onOpenResetPasswordStep">Esqueceu sua senha?</button>
-            <button class="link-like" type="button" @click="onBackToEmailStep">Trocar email</button>
           </div>
         </section>
 
         <section v-else-if="step === 'signup'" key="signup" class="step-block">
-          <h1>Criar conta</h1>
-          <p class="step-caption">{{ normalizedEmail }}</p>
+          <h1 class="title-with-icon">
+            <span class="title-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none">
+                <circle cx="9" cy="8" r="3.2" stroke="currentColor" stroke-width="1.9" />
+                <path d="M3.8 18.2c.8-2.6 2.9-4.2 5.2-4.2s4.4 1.6 5.2 4.2" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+                <path d="M18 9.2v6.2M14.9 12.3h6.2" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+              </svg>
+            </span>
+            <span>Criar conta</span>
+          </h1>
+          <p class="step-caption">
+            {{ normalizedEmail ? normalizedEmail : "Informe seus dados para criar o acesso." }}
+          </p>
           <form class="form-grid" @submit.prevent="onSubmitSignup">
-            <label>Nome (opcional)
-              <input v-model.trim="signupName" type="text" autocomplete="name" placeholder="Como voce prefere ser chamado" />
-            </label>
-            <label>Senha
+            <label for="signup-email">E-mail</label>
+            <input
+              id="signup-email"
+              ref="signupEmailInputRef"
+              v-model.trim="emailValue"
+              type="email"
+              autocomplete="username email"
+              placeholder="nome@provedor.com"
+              required
+              @input="emailTouched = true"
+            />
+            <label for="signup-name">Nome (opcional)</label>
+            <input id="signup-name" v-model.trim="signupName" type="text" autocomplete="name" placeholder="Como você prefere ser chamado" />
+            <label for="signup-password">Senha</label>
               <div class="input-with-toggle">
-                <input v-model="signupPassword" :type="showSignupPasswordField ? 'text' : 'password'" autocomplete="new-password" placeholder="Crie uma senha forte" class="has-toggle" required />
+                <input id="signup-password" ref="signupPasswordInputRef" v-model="signupPassword" :type="showSignupPasswordField ? 'text' : 'password'" autocomplete="new-password" placeholder="Crie uma senha forte" class="has-toggle" required @focus="isSignupPasswordFocused = true" @blur="isSignupPasswordFocused = false" />
                 <button class="password-toggle" type="button" :aria-label="showSignupPasswordField ? 'Ocultar senha' : 'Mostrar senha'" @click="showSignupPasswordField = !showSignupPasswordField">
                   <svg v-if="showSignupPasswordField" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                     <path d="M4 4 20 20" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
@@ -691,7 +888,22 @@ function resolveAuthError(error: unknown): { message: string; code: string | nul
                   </svg>
                 </button>
               </div>
-            </label>
+            <label for="signup-confirm-password">Confirmar senha</label>
+            <div class="input-with-toggle">
+              <input id="signup-confirm-password" v-model="signupConfirmPassword" :type="showSignupConfirmPasswordField ? 'text' : 'password'" autocomplete="new-password" placeholder="Repita a senha" class="has-toggle" required />
+              <button class="password-toggle" type="button" :aria-label="showSignupConfirmPasswordField ? 'Ocultar senha' : 'Mostrar senha'" @click="showSignupConfirmPasswordField = !showSignupConfirmPasswordField">
+                <svg v-if="showSignupConfirmPasswordField" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M4 4 20 20" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+                  <path d="M10.55 10.55a2 2 0 0 0 2.9 2.9" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+                  <path d="M6.7 6.7A12.4 12.4 0 0 0 3 12s3.3 6 9 6c2.1 0 3.9-.8 5.4-1.9" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+                  <path d="M14.7 5.2A9.9 9.9 0 0 1 21 12c-.6 1.1-1.4 2.4-2.6 3.6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <svg v-else viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M2.4 12s3.5-6 9.6-6 9.6 6 9.6 6-3.5 6-9.6 6-9.6-6-9.6-6Z" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" />
+                  <circle cx="12" cy="12" r="2.8" stroke="currentColor" stroke-width="1.9" />
+                </svg>
+              </button>
+            </div>
             <div class="password-checklist-slot" :class="{ visible: showSignupChecklist }" aria-live="polite">
               <TransitionGroup v-if="showSignupChecklist" name="check-item" tag="ul" class="password-checklist signup-checklist">
                 <li v-for="(rule, index) in signupRules" :key="`signup-${rule.key}`" class="password-rule" :class="rule.met ? 'met' : 'unmet'" :style="{ '--stagger-delay': `${index * 55}ms` }">
@@ -707,18 +919,22 @@ function resolveAuthError(error: unknown): { message: string; code: string | nul
                 </li>
               </TransitionGroup>
             </div>
-            <button class="btn-primary" :class="{ 'is-loading': isSignupSubmitting }" type="submit" :disabled="isSignupSubmitting || !signupStrong">
+            <button class="btn-primary" :class="{ 'is-loading': isSignupSubmitting }" type="submit" :disabled="isSignupSubmitting || !signupStrong || !signupPasswordsMatch">
               <span class="btn-spinner" aria-hidden="true" />
-              <span class="btn-label">Criar conta</span>
+              <span class="btn-label btn-label-with-icon">
+                <svg class="btn-action-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <circle cx="9" cy="8" r="3.2" stroke="currentColor" stroke-width="1.9" />
+                  <path d="M3.8 18.2c.8-2.6 2.9-4.2 5.2-4.2s4.4 1.6 5.2 4.2" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+                  <path d="M18 9.2v6.2M14.9 12.3h6.2" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+                </svg>
+                <span>Criar conta</span>
+              </span>
             </button>
           </form>
-          <div class="helper-row">
-            <button class="link-like" type="button" @click="onBackToEmailStep">Voltar</button>
-          </div>
         </section>
 
         <section v-else-if="step === 'verify-pending'" key="verify" class="step-block">
-          <h1>Verifique seu email</h1>
+          <h1>Verifique seu e-mail</h1>
           <p class="step-caption">{{ verification.email }}</p>
           <div class="state-card">
             <div class="state-icon success-envelope" aria-hidden="true">
@@ -727,7 +943,7 @@ function resolveAuthError(error: unknown): { message: string; code: string | nul
                 <path d="M4 7.4 12 13l8-5.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
             </div>
-            <p class="state-text">Abra o link enviado no seu email para ativar o acesso.</p>
+            <p class="state-text">Abra o link enviado no seu e-mail para ativar o acesso.</p>
           </div>
           <div class="feedback-slot step-feedback" aria-live="polite" aria-atomic="true">
             <Transition name="fade-up" mode="out-in">
@@ -740,15 +956,16 @@ function resolveAuthError(error: unknown): { message: string; code: string | nul
           <div class="form-grid">
             <button class="btn-primary" :class="{ 'is-loading': verification.isSending }" type="button" :disabled="verification.isSending || verification.resendSeconds > 0" @click="sendVerificationEmail()">
               <span class="btn-spinner" aria-hidden="true" />
-              <span class="btn-label">{{ verification.resendSeconds > 0 ? `Reenviar em ${verification.resendSeconds}s` : "Reenviar email" }}</span>
+              <span class="btn-label">{{ verificationResendLabel }}</span>
             </button>
-            <button class="btn-ghost" type="button" @click="onBackToEmailStep">Voltar ao login</button>
           </div>
         </section>
 
         <section v-else-if="step === 'reset-code'" key="reset-code" class="step-block">
+          <p class="step-progress">{{ resetProgressLabel }}</p>
           <h1>Recuperar senha</h1>
-          <p class="step-caption">{{ resetFlow.email }}</p>
+          <p class="step-caption">{{ maskedResetEmail }}</p>
+          <button class="link-like step-inline-link" type="button" @click="onBackToEmailStep">Não é você? Trocar e-mail</button>
           <div class="state-card">
             <div class="state-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none">
@@ -756,7 +973,7 @@ function resolveAuthError(error: unknown): { message: string; code: string | nul
                 <path d="M8 10V8a4 4 0 0 1 8 0v2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
               </svg>
             </div>
-            <p class="state-text">Digite o codigo de 6 digitos enviado para seu email.</p>
+            <p class="state-text">Enviamos um código de 6 dígitos para {{ maskedResetEmail }}.</p>
           </div>
           <div class="otp-grid" @paste="onResetCodePaste">
             <input v-for="(_, index) in resetFlow.codeDigits" :key="`otp-${index}`" :ref="(el) => setResetCodeInputRef(el as Element | null, index)" :value="resetFlow.codeDigits[index]" inputmode="numeric" maxlength="1" autocomplete="one-time-code" class="otp-input" @input="onResetCodeInput(index, $event)" @keydown="onResetCodeKeydown(index, $event)" />
@@ -767,20 +984,21 @@ function resolveAuthError(error: unknown): { message: string; code: string | nul
               <span v-else key="reset-feedback-empty" class="feedback-empty" aria-hidden="true" />
             </Transition>
           </div>
+          <p class="inline-hint hint-neutral">{{ resetResendHint }}</p>
           <div class="form-grid">
-            <button class="btn-primary" :class="{ 'is-loading': resetFlow.isVerifying }" type="button" :disabled="resetFlow.isVerifying" @click="onVerifyResetCode"><span class="btn-spinner" aria-hidden="true" /><span class="btn-label">Validar codigo</span></button>
-            <button class="btn-ghost" :class="{ 'is-loading': resetFlow.isRequesting }" type="button" :disabled="resetFlow.isRequesting || resetFlow.resendSeconds > 0" @click="requestResetCode()"><span class="btn-spinner" aria-hidden="true" /><span class="btn-label">{{ resetFlow.resendSeconds > 0 ? `Reenviar em ${resetFlow.resendSeconds}s` : "Reenviar codigo" }}</span></button>
-            <button class="link-like" type="button" @click="onBackToEmailStep">Voltar ao login</button>
+            <button class="btn-primary" :class="{ 'is-loading': resetFlow.isVerifying }" type="button" :disabled="resetFlow.isVerifying" @click="onVerifyResetCode"><span class="btn-spinner" aria-hidden="true" /><span class="btn-label">Validar código</span></button>
+            <button class="btn-ghost" :class="{ 'is-loading': resetFlow.isRequesting }" type="button" :disabled="resetFlow.isRequesting || resetFlow.resendSeconds > 0" @click="requestResetCode()"><span class="btn-spinner" aria-hidden="true" /><span class="btn-label">{{ resetResendLabel }}</span></button>
           </div>
         </section>
 
         <section v-else key="reset-password" class="step-block">
+          <p class="step-progress">{{ resetProgressLabel }}</p>
           <h1>Nova senha</h1>
-          <p class="step-caption">{{ resetFlow.email }}</p>
+          <p class="step-caption">{{ maskedResetEmail }}</p>
           <form class="form-grid" @submit.prevent="onCompleteResetWithCode">
-            <label>Nova senha
+            <label for="reset-password">Nova senha</label>
               <div class="input-with-toggle">
-                <input v-model="resetFlow.newPassword" :type="showResetPasswordField ? 'text' : 'password'" autocomplete="new-password" placeholder="Digite uma senha forte" class="has-toggle" required />
+                <input id="reset-password" ref="resetPasswordInputRef" v-model="resetFlow.newPassword" :type="showResetPasswordField ? 'text' : 'password'" autocomplete="new-password" placeholder="Digite uma senha forte" class="has-toggle" required @focus="isResetPasswordFocused = true" @blur="isResetPasswordFocused = false" />
                 <button class="password-toggle" type="button" :aria-label="showResetPasswordField ? 'Ocultar senha' : 'Mostrar senha'" @click="showResetPasswordField = !showResetPasswordField">
                   <svg v-if="showResetPasswordField" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                     <path d="M4 4 20 20" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
@@ -794,7 +1012,25 @@ function resolveAuthError(error: unknown): { message: string; code: string | nul
                   </svg>
                 </button>
               </div>
-            </label>
+            <label for="reset-password-confirm">Confirmar nova senha</label>
+            <div class="input-with-toggle">
+              <input id="reset-password-confirm" v-model="resetFlow.confirmPassword" :type="showResetConfirmPasswordField ? 'text' : 'password'" autocomplete="new-password" placeholder="Repita a nova senha" class="has-toggle" required />
+              <button class="password-toggle" type="button" :aria-label="showResetConfirmPasswordField ? 'Ocultar senha' : 'Mostrar senha'" @click="showResetConfirmPasswordField = !showResetConfirmPasswordField">
+                <svg v-if="showResetConfirmPasswordField" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M4 4 20 20" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+                  <path d="M10.55 10.55a2 2 0 0 0 2.9 2.9" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+                  <path d="M6.7 6.7A12.4 12.4 0 0 0 3 12s3.3 6 9 6c2.1 0 3.9-.8 5.4-1.9" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+                  <path d="M14.7 5.2A9.9 9.9 0 0 1 21 12c-.6 1.1-1.4 2.4-2.6 3.6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <svg v-else viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M2.4 12s3.5-6 9.6-6 9.6 6 9.6 6-3.5 6-9.6 6-9.6-6-9.6-6Z" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" />
+                  <circle cx="12" cy="12" r="2.8" stroke="currentColor" stroke-width="1.9" />
+                </svg>
+              </button>
+            </div>
+            <p v-if="resetCompromisedPasswordMessage" class="inline-hint hint-error">
+              {{ resetCompromisedPasswordMessage }}
+            </p>
             <div class="password-checklist-slot" :class="{ visible: showResetChecklist }" aria-live="polite">
               <TransitionGroup v-if="showResetChecklist" name="check-item" tag="ul" class="password-checklist signup-checklist">
                 <li v-for="(rule, index) in resetRules" :key="`reset-${rule.key}`" class="password-rule" :class="rule.met ? 'met' : 'unmet'" :style="{ '--stagger-delay': `${index * 55}ms` }">
@@ -812,18 +1048,24 @@ function resolveAuthError(error: unknown): { message: string; code: string | nul
             </div>
             <div class="feedback-slot step-feedback" aria-live="polite" aria-atomic="true">
               <Transition name="fade-up" mode="out-in">
-                <p v-if="resetFlow.error" key="reset-password-error" class="flash flash-error">{{ resetFlow.error }}</p>
+                <p
+                  v-if="resetFlow.error && !resetCompromisedPasswordMessage"
+                  key="reset-password-error"
+                  class="flash flash-error"
+                >
+                  {{ resetFlow.error }}
+                </p>
                 <span v-else key="reset-password-empty" class="feedback-empty" aria-hidden="true" />
               </Transition>
             </div>
-            <button class="btn-primary" :class="{ 'is-loading': resetFlow.isCompleting }" type="submit" :disabled="resetFlow.isCompleting || !resetStrong"><span class="btn-spinner" aria-hidden="true" /><span class="btn-label">Atualizar senha</span></button>
-            <button class="btn-ghost" type="button" @click="onBackToResetCode">Voltar para codigo</button>
+            <button class="btn-primary" :class="{ 'is-loading': resetFlow.isCompleting }" type="submit" :disabled="resetFlow.isCompleting || !resetStrong || !resetPasswordsMatch"><span class="btn-spinner" aria-hidden="true" /><span class="btn-label">Atualizar senha</span></button>
           </form>
         </section>
       </Transition>
+      </div>
 
       <div v-if="shouldShowSocial" class="auth-social-area">
-        <div class="section-divider" />
+        <div class="section-divider"><span>ou continue com</span></div>
         <button class="btn-microsoft" :class="{ 'is-loading': isMicrosoftSubmitting }" type="button" :disabled="isMicrosoftSubmitting || isGoogleSubmitting" @click="onSignInWithMicrosoft">
           <span class="btn-spinner" aria-hidden="true" />
           <span class="microsoft-icon" aria-hidden="true">
@@ -832,7 +1074,7 @@ function resolveAuthError(error: unknown): { message: string; code: string | nul
             <span class="microsoft-tile blue" />
             <span class="microsoft-tile yellow" />
           </span>
-          <span class="btn-label">Entrar com Microsoft</span>
+          <span class="btn-label">Continuar com Microsoft</span>
         </button>
         <button class="btn-google" :class="{ 'is-loading': isGoogleSubmitting }" type="button" :disabled="isGoogleSubmitting || isMicrosoftSubmitting" @click="onSignInWithGoogle">
           <span class="btn-spinner" aria-hidden="true" />
@@ -844,10 +1086,12 @@ function resolveAuthError(error: unknown): { message: string; code: string | nul
               <path fill="#FBBC05" d="M12 5.9c1.4 0 2.7.5 3.7 1.5l2.8-2.8A10 10 0 0 0 12 2C8 2 4.5 4.3 3.2 7.5L6.5 10c.7-2.4 2.9-4.1 5.5-4.1Z" />
             </svg>
           </span>
-          <span class="btn-label">Entrar com Google</span>
+          <span class="btn-label">Continuar com Google</span>
         </button>
-      </div>
-    </section>
+          </div>
+        </section>
+      </section>
+    </div>
 
     <Transition name="fade-up">
       <div v-if="isCallbackProcessing" class="callback-overlay" aria-live="polite" aria-busy="true">

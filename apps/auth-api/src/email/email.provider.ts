@@ -1,7 +1,11 @@
 import { EmailClient, type EmailMessage } from "@azure/communication-email";
 import type { AppEnv } from "../config/env.js";
 
-type Template = "email-verification" | "password-reset" | "email-change-code";
+type Template =
+  | "email-verification"
+  | "password-reset"
+  | "email-change-code"
+  | "password-changed-alert";
 
 export type EmailDeliveryInput = {
   to: string;
@@ -9,10 +13,16 @@ export type EmailDeliveryInput = {
   correlationId: string;
 };
 
+export type EmailAlertInput = {
+  to: string;
+  correlationId: string;
+};
+
 export interface EmailProvider {
   sendVerificationEmail(input: EmailDeliveryInput): Promise<void>;
   sendResetPasswordEmail(input: EmailDeliveryInput): Promise<void>;
   sendEmailChangeCode(input: EmailDeliveryInput): Promise<void>;
+  sendPasswordChangedAlert(input: EmailAlertInput): Promise<void>;
 }
 
 type EmailSendPoller = {
@@ -48,12 +58,17 @@ export class ConsoleEmailProvider implements EmailProvider {
     this.log("email-change-code", input);
   }
 
-  private log(template: Template, input: EmailDeliveryInput): void {
+  async sendPasswordChangedAlert(input: EmailAlertInput): Promise<void> {
+    this.log("password-changed-alert", input);
+  }
+
+  private log(template: Template, input: EmailDeliveryInput | EmailAlertInput): void {
+    const tokenPreview = "token" in input ? `${input.token.slice(0, 6)}...` : undefined;
     // eslint-disable-next-line no-console
     console.info(`[auth-email:${template}]`, {
       to: input.to,
       correlationId: input.correlationId,
-      tokenPreview: `${input.token.slice(0, 6)}...`,
+      ...(tokenPreview ? { tokenPreview } : {}),
     });
   }
 }
@@ -83,9 +98,15 @@ export class FallbackEmailProvider implements EmailProvider {
     );
   }
 
+  async sendPasswordChangedAlert(input: EmailAlertInput): Promise<void> {
+    await this.sendWithFallback("password-changed-alert", input, () =>
+      this.primary.sendPasswordChangedAlert(input),
+    );
+  }
+
   private async sendWithFallback(
     template: Template,
-    input: EmailDeliveryInput,
+    input: EmailDeliveryInput | EmailAlertInput,
     sendPrimary: () => Promise<void>,
   ): Promise<void> {
     try {
@@ -100,15 +121,22 @@ export class FallbackEmailProvider implements EmailProvider {
         message: errorMessage(error),
       });
       if (template === "email-verification") {
-        await this.fallback.sendVerificationEmail(input);
+        await this.fallback.sendVerificationEmail(requireDeliveryInput(template, input));
         return;
       }
       if (template === "password-reset") {
-        await this.fallback.sendResetPasswordEmail(input);
+        await this.fallback.sendResetPasswordEmail(requireDeliveryInput(template, input));
         return;
       }
       if (template === "email-change-code") {
-        await this.fallback.sendEmailChangeCode(input);
+        await this.fallback.sendEmailChangeCode(requireDeliveryInput(template, input));
+        return;
+      }
+      if (template === "password-changed-alert") {
+        await this.fallback.sendPasswordChangedAlert({
+          to: input.to,
+          correlationId: input.correlationId,
+        });
         return;
       }
     }
@@ -148,7 +176,14 @@ export class AzureAcsEmailProvider implements EmailProvider {
     await this.sendWithRetry("email-change-code", input);
   }
 
-  private async sendWithRetry(template: Template, input: EmailDeliveryInput): Promise<void> {
+  async sendPasswordChangedAlert(input: EmailAlertInput): Promise<void> {
+    await this.sendWithRetry("password-changed-alert", input);
+  }
+
+  private async sendWithRetry(
+    template: Template,
+    input: EmailDeliveryInput | EmailAlertInput,
+  ): Promise<void> {
     for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
       try {
         await this.sendOnce(template, input);
@@ -172,7 +207,10 @@ export class AzureAcsEmailProvider implements EmailProvider {
     }
   }
 
-  private async sendOnce(template: Template, input: EmailDeliveryInput): Promise<void> {
+  private async sendOnce(
+    template: Template,
+    input: EmailDeliveryInput | EmailAlertInput,
+  ): Promise<void> {
     const message = this.buildMessage(template, input);
     const startedAt = Date.now();
     const poller = await withTimeout(
@@ -193,8 +231,8 @@ export class AzureAcsEmailProvider implements EmailProvider {
     }
   }
 
-  private buildMessage(template: Template, input: EmailDeliveryInput): EmailMessage {
-    const data = this.buildTemplateData(template, input.token);
+  private buildMessage(template: Template, input: EmailDeliveryInput | EmailAlertInput): EmailMessage {
+    const data = this.buildTemplateData(template, "token" in input ? input.token : undefined);
     return {
       senderAddress: this.senderAddress,
       content: {
@@ -224,15 +262,14 @@ export class AzureAcsEmailProvider implements EmailProvider {
     };
   }
 
-  private buildTemplateData(template: Template, token: string): {
+  private buildTemplateData(template: Template, token?: string): {
     subject: string;
     plainText: string;
     html: string;
   } {
-    const encodedToken = encodeURIComponent(token);
-
     if (template === "email-verification") {
-      const verificationUrl = buildUrlWithToken(this.verifyPageUrl, encodedToken);
+      if (!token) throw new Error("email-verification template requires token");
+      const verificationUrl = buildUrlWithToken(this.verifyPageUrl, token);
       return {
         subject: "Sigfarm - Verifique seu email",
         plainText: [
@@ -248,8 +285,25 @@ export class AzureAcsEmailProvider implements EmailProvider {
       };
     }
 
-    const resetUrl = buildUrlWithToken(this.resetPageUrl, encodedToken);
     if (template === "password-reset") {
+      if (!token) throw new Error("password-reset template requires token");
+      if (isNumericSixDigitToken(token)) {
+        return {
+          subject: "Sigfarm - Codigo para redefinir senha",
+          plainText: [
+            "Recebemos um pedido para redefinir sua senha.",
+            "Use o codigo abaixo na tela de recuperacao de senha:",
+            `Codigo: ${token}`,
+          ].join("\n"),
+          html: [
+            "<p>Recebemos um pedido para redefinir sua senha.</p>",
+            "<p>Use o codigo abaixo na tela de recuperacao de senha:</p>",
+            `<p><strong style="font-size:20px;letter-spacing:0.12em">${escapeHtml(token)}</strong></p>`,
+          ].join(""),
+        };
+      }
+
+      const resetUrl = buildUrlWithToken(this.resetPageUrl, token);
       return {
         subject: "Sigfarm - Redefinição de senha",
         plainText: [
@@ -265,6 +319,23 @@ export class AzureAcsEmailProvider implements EmailProvider {
       };
     }
 
+    if (template === "password-changed-alert") {
+      return {
+        subject: "Sigfarm - Senha alterada",
+        plainText: [
+          "A senha da sua conta foi alterada.",
+          "Se voce reconhece essa alteracao, nenhuma acao adicional e necessaria.",
+          "Se voce nao reconhece, redefina sua senha imediatamente e contate o suporte.",
+        ].join("\n"),
+        html: [
+          "<p>A senha da sua conta foi alterada.</p>",
+          "<p>Se voce reconhece essa alteracao, nenhuma acao adicional e necessaria.</p>",
+          "<p>Se voce nao reconhece, redefina sua senha imediatamente e contate o suporte.</p>",
+        ].join(""),
+      };
+    }
+
+    if (!token) throw new Error("email-change-code template requires token");
     return {
       subject: "Sigfarm - Codigo para alterar email",
       plainText: [
@@ -380,8 +451,20 @@ function delay(ms: number): Promise<void> {
   });
 }
 
-function buildUrlWithToken(baseUrl: string, encodedToken: string): string {
+function isNumericSixDigitToken(value: string): boolean {
+  return /^\d{6}$/.test(value);
+}
+
+function requireDeliveryInput(
+  template: Exclude<Template, "password-changed-alert">,
+  input: EmailDeliveryInput | EmailAlertInput,
+): EmailDeliveryInput {
+  if ("token" in input) return input;
+  throw new Error(`${template} template requires token`);
+}
+
+function buildUrlWithToken(baseUrl: string, token: string): string {
   const url = new URL(baseUrl);
-  url.searchParams.set("token", encodedToken);
+  url.searchParams.set("token", token);
   return url.toString();
 }

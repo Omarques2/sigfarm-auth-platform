@@ -225,8 +225,8 @@ function buildDependencies(): AppDependencies {
       async requestPasswordResetCode(input) {
         if (input.email !== "user@sigfarm.com") {
           return {
-            status: "missing" as const,
-            retryAfterSeconds: 0,
+            status: "sent" as const,
+            retryAfterSeconds: 60,
           };
         }
         return {
@@ -490,7 +490,7 @@ describe("auth-api epic-02", () => {
       },
     });
     expect(requestMissing.statusCode).toBe(200);
-    expect(requestMissing.json().data.status).toBe("missing");
+    expect(requestMissing.json().data.status).toBe("sent");
 
     const requestCode = await app.inject({
       method: "POST",

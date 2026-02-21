@@ -43,6 +43,8 @@ const envSchema = z.object({
   AUTH_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(60),
   AUTH_RATE_LIMIT_LOGIN_MAX_REQUESTS: z.coerce.number().int().positive().default(10),
   AUTH_REQUIRE_EMAIL_VERIFICATION: z.string().optional(),
+  AUTH_PWNED_PASSWORD_CHECK_ENABLED: z.string().optional(),
+  AUTH_PWNED_PASSWORD_CHECK_TIMEOUT_MS: z.coerce.number().int().positive().default(1_800),
   EMAIL_PROVIDER: z.enum(EMAIL_PROVIDER_VALUES).optional(),
   ACS_EMAIL_CONNECTION_STRING: z.string().optional(),
   ACS_EMAIL_SENDER: z.string().optional(),
@@ -78,6 +80,8 @@ export type AppEnv = {
   rateLimitMaxRequests: number;
   rateLimitLoginMaxRequests: number;
   requireEmailVerification: boolean;
+  authPwnedPasswordCheckEnabled?: boolean;
+  authPwnedPasswordCheckTimeoutMs?: number;
   emailProvider?: (typeof EMAIL_PROVIDER_VALUES)[number];
   acsEmailConnectionString?: string;
   acsEmailSender?: string;
@@ -132,6 +136,11 @@ export function loadEnv(rawEnv: NodeJS.ProcessEnv = process.env): AppEnv {
     rateLimitMaxRequests: parsed.AUTH_RATE_LIMIT_MAX_REQUESTS,
     rateLimitLoginMaxRequests: parsed.AUTH_RATE_LIMIT_LOGIN_MAX_REQUESTS,
     requireEmailVerification: parseBoolean(parsed.AUTH_REQUIRE_EMAIL_VERIFICATION, true),
+    authPwnedPasswordCheckEnabled: parseBoolean(
+      parsed.AUTH_PWNED_PASSWORD_CHECK_ENABLED,
+      parsed.NODE_ENV !== "test",
+    ),
+    authPwnedPasswordCheckTimeoutMs: parsed.AUTH_PWNED_PASSWORD_CHECK_TIMEOUT_MS,
     ...(parsed.EMAIL_PROVIDER ? { emailProvider: parsed.EMAIL_PROVIDER } : {}),
     ...(acsEmailConnectionString ? { acsEmailConnectionString } : {}),
     ...(acsEmailSender ? { acsEmailSender } : {}),

@@ -51,9 +51,12 @@ import {
   type AccountFlowService,
 } from "./auth/account-flow.service.js";
 import {
+  DEFAULT_PWNED_PASSWORD_TIMEOUT_MS,
+  PASSWORD_COMPROMISED_MESSAGE,
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
   PASSWORD_POLICY_MESSAGE,
+  isPasswordCompromised,
   isPasswordPolicyCompliant,
 } from "./auth/password-policy.js";
 
@@ -115,8 +118,8 @@ const completeResetCodeBodySchema = z.object({
   code: z.string().regex(/^\d{6}$/),
   newPassword: z
     .string()
-    .min(PASSWORD_MIN_LENGTH)
-    .max(PASSWORD_MAX_LENGTH)
+    .min(PASSWORD_MIN_LENGTH, PASSWORD_POLICY_MESSAGE)
+    .max(PASSWORD_MAX_LENGTH, PASSWORD_POLICY_MESSAGE)
     .refine(isPasswordPolicyCompliant, {
       message: PASSWORD_POLICY_MESSAGE,
     }),
@@ -564,10 +567,22 @@ export async function buildServer(options?: BuildServerOptions): Promise<Fastify
     if (!body) return;
     const clientMeta = getClientMeta(request);
 
+    const compromised = await isPasswordCompromised(body.newPassword, {
+      enabled: env.authPwnedPasswordCheckEnabled ?? env.nodeEnv !== "test",
+      timeoutMs: env.authPwnedPasswordCheckTimeoutMs ?? DEFAULT_PWNED_PASSWORD_TIMEOUT_MS,
+    });
+
+    if (compromised) {
+      return reply
+        .status(422)
+        .send(authError("INVALID_CREDENTIALS", PASSWORD_COMPROMISED_MESSAGE, correlationId));
+    }
+
     const updated = await dependencies.accountFlowService.completePasswordResetWithCode({
       email: body.email,
       code: body.code,
       newPassword: body.newPassword,
+      correlationId,
       ...clientMeta,
     });
 

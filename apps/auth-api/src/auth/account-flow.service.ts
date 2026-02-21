@@ -20,7 +20,7 @@ export type PasswordResetRequestInput = {
 };
 
 export type PasswordResetRequestResult = {
-  status: "sent" | "cooldown" | "missing";
+  status: "sent" | "cooldown";
   retryAfterSeconds: number;
 };
 
@@ -33,6 +33,7 @@ export type CompletePasswordResetInput = {
   email: string;
   code: string;
   newPassword: string;
+  correlationId: string;
   ip?: string;
   userAgent?: string;
 };
@@ -155,8 +156,9 @@ export class PrismaAccountFlowService implements AccountFlowService {
 
     if (!user) {
       return {
-        status: "missing",
-        retryAfterSeconds: 0,
+        // Anti-enumeration: return accepted-like response even when account does not exist.
+        status: "sent",
+        retryAfterSeconds: this.resendCooldownSeconds,
       };
     }
 
@@ -315,6 +317,15 @@ export class PrismaAccountFlowService implements AccountFlowService {
       ...(input.ip ? { ip: input.ip } : {}),
       ...(input.userAgent ? { userAgent: input.userAgent } : {}),
     });
+
+    void this.emailProvider
+      .sendPasswordChangedAlert({
+        to: user.email,
+        correlationId: input.correlationId,
+      })
+      .catch(() => {
+        return;
+      });
 
     return true;
   }

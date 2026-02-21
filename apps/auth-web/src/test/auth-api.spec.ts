@@ -15,6 +15,7 @@ function mockJsonResponse(status: number, payload: unknown): Response {
 describe("AuthApiClient", () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -200,12 +201,12 @@ describe("AuthApiClient", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it("handles missing account when requesting reset code", async () => {
+  it("handles generic response when requesting reset code for unknown account", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       mockJsonResponse(200, {
         data: {
-          status: "missing",
-          retryAfterSeconds: 0,
+          status: "sent",
+          retryAfterSeconds: 60,
         },
       }),
     );
@@ -216,8 +217,8 @@ describe("AuthApiClient", () => {
     });
 
     const requested = await client.requestPasswordResetCode("missing@sigfarm.com");
-    expect(requested.status).toBe("missing");
-    expect(requested.retryAfterSeconds).toBe(0);
+    expect(requested.status).toBe("sent");
+    expect(requested.retryAfterSeconds).toBe(60);
   });
 
   it("calls sign-out endpoint", async () => {
@@ -317,5 +318,55 @@ describe("AuthApiClient", () => {
     });
     expect(confirmed.updated).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("retries once on transient network failure", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(
+        mockJsonResponse(200, {
+          data: {
+            accountState: "active",
+            retryAfterSeconds: 0,
+          },
+        }),
+      );
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const client = new AuthApiClient({
+      authApiBaseUrl: "https://auth.sigfarmintelligence.com",
+    });
+
+    const pending = client.discoverEmail("user@sigfarm.com");
+    await vi.advanceTimersByTimeAsync(300);
+    const result = await pending;
+
+    expect(result.accountState).toBe("active");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry on HTTP error responses", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockJsonResponse(422, {
+        error: {
+          message: "invalid credentials",
+        },
+      }),
+    );
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const client = new AuthApiClient({
+      authApiBaseUrl: "https://auth.sigfarmintelligence.com",
+    });
+
+    await expect(
+      client.signInEmail({
+        email: "user@sigfarm.com",
+        password: "invalid",
+      }),
+    ).rejects.toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

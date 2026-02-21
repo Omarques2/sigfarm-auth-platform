@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref } from "vue";
-import { RouterLink, useRoute, useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
+import AuthBackButton from "../components/AuthBackButton.vue";
 import { authApiClient, AuthApiError } from "../lib/auth-api";
+import { readTokenFromLocation } from "../lib/token-query";
 
 type PasswordRule = {
   key: string;
@@ -24,7 +26,7 @@ const form = reactive({
   password: "",
 });
 
-const token = computed(() => firstQueryValue(route.query.token));
+const token = computed(() => readTokenFromLocation(route.query as Record<string, unknown>));
 const hasToken = computed(() => Boolean(token.value));
 const passwordRules = computed(() => buildPasswordRules(form.password));
 const isStrongPassword = computed(() => passwordRules.value.every((rule) => rule.met));
@@ -84,12 +86,6 @@ function scheduleLoginRedirect(): void {
   }, 1000);
 }
 
-function firstQueryValue(value: unknown): string | undefined {
-  if (typeof value === "string") return value;
-  if (Array.isArray(value) && typeof value[0] === "string") return value[0];
-  return undefined;
-}
-
 function buildPasswordRules(password: string): PasswordRule[] {
   return [
     {
@@ -142,8 +138,9 @@ function resolveErrorMessage(error: unknown): string {
 
     <section class="login-content-zone">
       <div class="step-block">
+        <AuthBackButton to="/login" />
         <h1>Nova senha</h1>
-        <p class="step-caption">Defina uma nova senha para continuar.</p>
+        <p class="step-caption">Defina uma nova senha para concluir a atualizacao de acesso.</p>
 
         <p v-if="!hasToken" class="flash flash-error">
           Link invalido. Solicite um novo email de recuperacao.
@@ -225,9 +222,6 @@ function resolveErrorMessage(error: unknown): string {
           <span class="inline-hint"> Redirecionando em {{ redirectSeconds }}s...</span>
         </p>
 
-        <p class="helper-row single">
-          <RouterLink class="link-like" to="/login">Voltar para login</RouterLink>
-        </p>
       </div>
     </section>
   </article>
