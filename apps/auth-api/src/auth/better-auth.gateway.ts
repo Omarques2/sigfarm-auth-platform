@@ -49,6 +49,7 @@ export function createBetterAuthGateway(options: CreateAuthGatewayOptions): Auth
             clientId: options.env.entraClientId,
             clientSecret: options.env.entraClientSecret,
             tenantId: options.env.entraTenantId,
+            prompt: "select_account" as const,
             mapProfileToUser: mapMicrosoftProfileToUser,
           },
         }
