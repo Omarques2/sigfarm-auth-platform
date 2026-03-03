@@ -12,6 +12,8 @@ import {
   getResendLabel,
 } from "../lib/reset-flow";
 import { resolveSafeReturnTo } from "../lib/return-to";
+import { shouldShowPasswordChecklist } from "../lib/password-checklist";
+import { shouldShowPasswordMismatch } from "../lib/password-confirmation";
 
 type LoginStep = "email" | "password" | "signup" | "verify-pending" | "reset-code" | "reset-password";
 type Rule = { key: string; label: string; met: boolean };
@@ -36,8 +38,6 @@ const showSignupPasswordField = ref(false);
 const showSignupConfirmPasswordField = ref(false);
 const showResetPasswordField = ref(false);
 const showResetConfirmPasswordField = ref(false);
-const isSignupPasswordFocused = ref(false);
-const isResetPasswordFocused = ref(false);
 
 const isEmailSubmitting = ref(false);
 const isPasswordSubmitting = ref(false);
@@ -88,21 +88,39 @@ const callbackUrl = computed(() => {
 });
 const signupRules = computed(() => passwordRules(signupPassword.value));
 const signupStrong = computed(() => signupRules.value.every((rule) => rule.met));
-const showSignupChecklist = computed(() => isSignupPasswordFocused.value);
+const showSignupChecklist = computed(() =>
+  shouldShowPasswordChecklist({
+    primaryPassword: signupPassword.value,
+    confirmationPassword: signupConfirmPassword.value,
+    isStrongPassword: signupStrong.value,
+  }),
+);
 const resetRules = computed(() => passwordRules(resetFlow.newPassword));
 const resetStrong = computed(() => resetRules.value.every((rule) => rule.met));
-const showResetChecklist = computed(() => isResetPasswordFocused.value);
+const showResetChecklist = computed(() =>
+  shouldShowPasswordChecklist({
+    primaryPassword: resetFlow.newPassword,
+    confirmationPassword: resetFlow.confirmPassword,
+    isStrongPassword: resetStrong.value,
+  }),
+);
 const signupPasswordsMatch = computed(
   () =>
     signupPassword.value.length > 0 &&
     signupConfirmPassword.value.length > 0 &&
     signupPassword.value === signupConfirmPassword.value,
 );
+const showSignupPasswordMismatch = computed(() =>
+  shouldShowPasswordMismatch(signupPassword.value, signupConfirmPassword.value),
+);
 const resetPasswordsMatch = computed(
   () =>
     resetFlow.newPassword.length > 0 &&
     resetFlow.confirmPassword.length > 0 &&
     resetFlow.newPassword === resetFlow.confirmPassword,
+);
+const showResetPasswordMismatch = computed(() =>
+  shouldShowPasswordMismatch(resetFlow.newPassword, resetFlow.confirmPassword),
 );
 const isEmailValid = computed(() => isValidEmail(normalizedEmail.value));
 const emailValidationMessage = computed(() => {
@@ -874,7 +892,7 @@ function resolveAuthError(error: unknown): { message: string; code: string | nul
             <input id="signup-name" v-model.trim="signupName" type="text" autocomplete="name" placeholder="Como você prefere ser chamado" />
             <label for="signup-password">Senha</label>
               <div class="input-with-toggle">
-                <input id="signup-password" ref="signupPasswordInputRef" v-model="signupPassword" :type="showSignupPasswordField ? 'text' : 'password'" autocomplete="new-password" placeholder="Crie uma senha forte" class="has-toggle" required @focus="isSignupPasswordFocused = true" @blur="isSignupPasswordFocused = false" />
+                <input id="signup-password" ref="signupPasswordInputRef" v-model="signupPassword" :type="showSignupPasswordField ? 'text' : 'password'" autocomplete="new-password" placeholder="Crie uma senha forte" class="has-toggle" required />
                 <button class="password-toggle" type="button" :aria-label="showSignupPasswordField ? 'Ocultar senha' : 'Mostrar senha'" @click="showSignupPasswordField = !showSignupPasswordField">
                   <svg v-if="showSignupPasswordField" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                     <path d="M4 4 20 20" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
@@ -904,6 +922,9 @@ function resolveAuthError(error: unknown): { message: string; code: string | nul
                 </svg>
               </button>
             </div>
+            <p v-if="showSignupPasswordMismatch" class="inline-hint hint-error">
+              As senhas informadas não coincidem.
+            </p>
             <div class="password-checklist-slot" :class="{ visible: showSignupChecklist }" aria-live="polite">
               <TransitionGroup v-if="showSignupChecklist" name="check-item" tag="ul" class="password-checklist signup-checklist">
                 <li v-for="(rule, index) in signupRules" :key="`signup-${rule.key}`" class="password-rule" :class="rule.met ? 'met' : 'unmet'" :style="{ '--stagger-delay': `${index * 55}ms` }">
@@ -998,7 +1019,7 @@ function resolveAuthError(error: unknown): { message: string; code: string | nul
           <form class="form-grid" @submit.prevent="onCompleteResetWithCode">
             <label for="reset-password">Nova senha</label>
               <div class="input-with-toggle">
-                <input id="reset-password" ref="resetPasswordInputRef" v-model="resetFlow.newPassword" :type="showResetPasswordField ? 'text' : 'password'" autocomplete="new-password" placeholder="Digite uma senha forte" class="has-toggle" required @focus="isResetPasswordFocused = true" @blur="isResetPasswordFocused = false" />
+                <input id="reset-password" ref="resetPasswordInputRef" v-model="resetFlow.newPassword" :type="showResetPasswordField ? 'text' : 'password'" autocomplete="new-password" placeholder="Digite uma senha forte" class="has-toggle" required />
                 <button class="password-toggle" type="button" :aria-label="showResetPasswordField ? 'Ocultar senha' : 'Mostrar senha'" @click="showResetPasswordField = !showResetPasswordField">
                   <svg v-if="showResetPasswordField" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                     <path d="M4 4 20 20" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
@@ -1028,6 +1049,9 @@ function resolveAuthError(error: unknown): { message: string; code: string | nul
                 </svg>
               </button>
             </div>
+            <p v-if="showResetPasswordMismatch" class="inline-hint hint-error">
+              As senhas informadas não coincidem.
+            </p>
             <p v-if="resetCompromisedPasswordMessage" class="inline-hint hint-error">
               {{ resetCompromisedPasswordMessage }}
             </p>

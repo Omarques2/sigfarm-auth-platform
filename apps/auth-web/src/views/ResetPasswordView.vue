@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import AuthBackButton from "../components/AuthBackButton.vue";
 import { authApiClient, AuthApiError } from "../lib/auth-api";
+import { shouldShowPasswordChecklist } from "../lib/password-checklist";
 import { readTokenFromLocation } from "../lib/token-query";
 
 type PasswordRule = {
@@ -30,7 +31,12 @@ const token = computed(() => readTokenFromLocation(route.query as Record<string,
 const hasToken = computed(() => Boolean(token.value));
 const passwordRules = computed(() => buildPasswordRules(form.password));
 const isStrongPassword = computed(() => passwordRules.value.every((rule) => rule.met));
-const showChecklist = computed(() => form.password.trim().length > 0);
+const showChecklist = computed(() =>
+  shouldShowPasswordChecklist({
+    primaryPassword: form.password,
+    isStrongPassword: isStrongPassword.value,
+  }),
+);
 
 onBeforeUnmount(() => {
   if (redirectTimer) clearInterval(redirectTimer);
