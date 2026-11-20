@@ -49,6 +49,7 @@ const envSchema = z.object({
   ACS_EMAIL_CONNECTION_STRING: z.string().optional(),
   ACS_EMAIL_SENDER: z.string().optional(),
   ACS_EMAIL_REPLY_TO: z.string().optional(),
+  AUTH_WEB_BASE_URL: z.string().url().optional(),
   AUTH_EMAIL_VERIFY_PAGE_URL: z.string().url().optional(),
   AUTH_EMAIL_RESET_PAGE_URL: z.string().url().optional(),
   AUTH_EMAIL_SEND_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
@@ -86,6 +87,8 @@ export type AppEnv = {
   acsEmailConnectionString?: string;
   acsEmailSender?: string;
   acsEmailReplyTo?: string;
+  /** Origem do portal (auth-web). Usada como destino de erros de login social. */
+  authWebBaseUrl?: string;
   authEmailVerifyPageUrl: string;
   authEmailResetPageUrl: string;
   authEmailSendTimeoutMs: number;
@@ -103,6 +106,10 @@ export function loadEnv(rawEnv: NodeJS.ProcessEnv = process.env): AppEnv {
   const acsEmailSender = parseOptionalString(parsed.ACS_EMAIL_SENDER);
   const acsEmailReplyTo = parseOptionalString(parsed.ACS_EMAIL_REPLY_TO);
   const authEmailVerifyPageUrl = parsed.AUTH_EMAIL_VERIFY_PAGE_URL ?? `${baseUrl}/verify-email`;
+  // AUTH_WEB_BASE_URL explícita; senão, a origem da página de verificação de e-mail
+  // (que já aponta para o portal em staging/prod).
+  const authWebBaseUrlSource = parsed.AUTH_WEB_BASE_URL ?? parsed.AUTH_EMAIL_VERIFY_PAGE_URL;
+  const authWebBaseUrl = authWebBaseUrlSource ? new URL(authWebBaseUrlSource).origin : undefined;
   const authEmailResetPageUrl = parsed.AUTH_EMAIL_RESET_PAGE_URL ?? `${baseUrl}/reset-password`;
   const betterAuthSecret =
     parsed.BETTER_AUTH_SECRET ??
@@ -145,6 +152,7 @@ export function loadEnv(rawEnv: NodeJS.ProcessEnv = process.env): AppEnv {
     ...(acsEmailConnectionString ? { acsEmailConnectionString } : {}),
     ...(acsEmailSender ? { acsEmailSender } : {}),
     ...(acsEmailReplyTo ? { acsEmailReplyTo } : {}),
+    ...(authWebBaseUrl ? { authWebBaseUrl } : {}),
     authEmailVerifyPageUrl,
     authEmailResetPageUrl,
     authEmailSendTimeoutMs: parsed.AUTH_EMAIL_SEND_TIMEOUT_MS,

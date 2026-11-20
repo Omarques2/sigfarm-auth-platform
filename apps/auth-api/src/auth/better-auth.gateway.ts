@@ -8,6 +8,7 @@ import type { AppEnv } from "../config/env.js";
 import type { EmailProvider } from "../email/email.provider.js";
 import type { AuditEventInput, AuditService } from "./audit.service.js";
 import type { AuthUser, IdentityService } from "./identity.service.js";
+import { buildAuthErrorUrl } from "./error-url.js";
 import { mapMicrosoftProfileToUser } from "./microsoft-profile.js";
 import {
   DEFAULT_PWNED_PASSWORD_TIMEOUT_MS,
@@ -42,6 +43,7 @@ export function createBetterAuthGateway(options: CreateAuthGatewayOptions): Auth
     options.env.betterAuthTrustedOrigins,
     options.env.betterAuthBaseUrl,
   );
+  const authErrorUrl = buildAuthErrorUrl(options.env.authWebBaseUrl);
   const socialProviders = {
     ...(options.env.entraClientId && options.env.entraClientSecret && options.env.entraTenantId
       ? {
@@ -229,6 +231,7 @@ export function createBetterAuthGateway(options: CreateAuthGatewayOptions): Auth
       encryptOAuthTokens: true,
     },
     onAPIError: {
+      ...(authErrorUrl ? { errorURL: authErrorUrl } : {}),
       onError: async (error) => {
         const errorMessage =
           error instanceof Error ? error.message : typeof error === "string" ? error : "unknown";
